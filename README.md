@@ -21,7 +21,7 @@ Use a dedicated profile limited to [`iam/scanner-readonly-policy.json`](iam/scan
 A scan deploys nothing, enables nothing and creates no resources.
 
 The policy limits log reading to log groups named `/aws/route53resolver/*`. If your Resolver query logs
-go somewhere else, add that log group, or domains will show as "in config" rather than "contacted". It
+go somewhere else, add that log group, or domains will show as "in config" rather than "queried". It
 also lets Trivy pull any image in the scanning account, because agent repositories have no fixed naming.
 Remove the two `Trivy` statements and set `TRIVY_ENABLED=false` if you don't want that.
 

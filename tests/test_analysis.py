@@ -2,12 +2,16 @@
 
 from datetime import UTC, datetime
 
+from agent_identity.analysis.autonomy import estimate_scope
+from agent_identity.analysis.data_access import build_data_grants, build_secret_grants
+from agent_identity.analysis.discovery import can_act
 from agent_identity.analysis.engine import analyse, estate_score
 from agent_identity.analysis.permissions import (
     assumable_roles,
     evaluate,
     is_admin_equivalent,
     parse_policy,
+    patterns_overlap,
     privilege_escalation_paths,
 )
 from agent_identity.demo.estate import build_snapshot
@@ -16,13 +20,18 @@ from agent_identity.models import (
     Agent,
     AgentKind,
     Confidence,
+    Coverage,
+    CoverageStatus,
     DataStore,
     Evidence,
     Identity,
     NetworkProfile,
     Platform,
+    SaasConnection,
+    Secret,
     Sensitivity,
     Snapshot,
+    Tool,
 )
 
 NOW = datetime(2026, 11, 1, tzinfo=UTC)
@@ -131,6 +140,132 @@ def test_assuming_a_role_needs_both_permission_and_trust():
     assert assumable_roles(caller, [trusting, distrusting]) == [trusting]
 
 
+def _role(name, *statements, **kwargs):
+    return Identity(
+        arn=f"arn:aws:iam::1:role/{name}",
+        name=name,
+        kind="role",
+        account_id="1",
+        policies=[parse_policy("p", {"Statement": list(statements)})],
+        **kwargs,
+    )
+
+
+def deny(action, resource="*", **extra):
+    return {"Effect": "Deny", "Action": action, "Resource": resource, **extra}
+
+
+def test_resource_patterns_are_case_sensitive():
+    identity = _identity(allow("s3:GetObject", f"{BUCKET}/Private/*"))
+    assert evaluate(identity, "s3:GetObject", f"{BUCKET}/Private/k").allowed
+    assert not evaluate(identity, "s3:GetObject", f"{BUCKET}/private/k").allowed
+
+
+def test_square_brackets_in_a_resource_are_literal():
+    identity = _identity(allow("s3:GetObject", f"{BUCKET}/[ab]/*"))
+    assert evaluate(identity, "s3:GetObject", f"{BUCKET}/[ab]/k").allowed
+    assert not evaluate(identity, "s3:GetObject", f"{BUCKET}/a/k").allowed
+
+
+def test_patterns_overlap():
+    assert patterns_overlap("data/*", "*/private/*")
+    assert patterns_overlap("a?c", "abc")
+    assert not patterns_overlap("data/*", "logs/*")
+
+
+def test_resource_policy_allow_does_not_beat_an_identity_deny():
+    grant = parse_policy("bp", {"Statement": [allow("s3:GetObject", f"{BUCKET}/*")]})
+    identity = _identity(deny("s3:GetObject"))
+    assert not evaluate(identity, "s3:GetObject", f"{BUCKET}/k", grant).allowed
+    assert evaluate(_identity(), "s3:GetObject", f"{BUCKET}/k", grant).allowed
+
+
+def test_resource_policy_only_applies_to_the_principals_it_names():
+    me, other = _identity(), _role("other")
+    bucket_policy = {
+        "Statement": [
+            allow("s3:GetObject", f"{BUCKET}/*", Principal={"AWS": me.arn}),
+            deny("s3:PutObject", f"{BUCKET}/*", Principal={"AWS": other.arn}),
+        ]
+    }
+    grant = parse_policy("bp", bucket_policy)
+    assert evaluate(me, "s3:GetObject", f"{BUCKET}/k", grant).allowed
+    assert not evaluate(other, "s3:GetObject", f"{BUCKET}/k", grant).allowed
+    writer = _identity(allow("s3:PutObject"))
+    assert evaluate(writer, "s3:PutObject", f"{BUCKET}/k", grant).allowed
+
+
+def test_not_principal_and_account_principals_in_a_resource_policy():
+    me = _identity()
+    everyone_else = parse_policy(
+        "bp", {"Statement": [{**deny("s3:*"), "NotPrincipal": {"AWS": me.arn}}]}
+    )
+    assert not evaluate(
+        _role("other", allow("s3:*")), "s3:GetObject", BUCKET, everyone_else
+    ).allowed
+    assert evaluate(_identity(allow("s3:*")), "s3:GetObject", BUCKET, everyone_else).allowed
+    # Naming the account delegates to IAM policies. It doesn't grant anything itself.
+    delegated = parse_policy(
+        "bp", {"Statement": [allow("s3:GetObject", Principal={"AWS": "arn:aws:iam::1:root"})]}
+    )
+    assert not evaluate(me, "s3:GetObject", BUCKET, delegated).allowed
+    assert evaluate(_identity(allow("s3:GetObject")), "s3:GetObject", BUCKET, delegated).allowed
+
+
+def test_pass_role_that_is_denied_is_not_an_escalation_path():
+    identity = _identity(
+        allow("iam:PassRole", "arn:aws:iam::1:role/x"),
+        allow("lambda:CreateFunction"),
+        deny("iam:PassRole"),
+    )
+    assert privilege_escalation_paths(identity) == []
+
+
+def test_pass_role_outside_the_boundary_resources_is_not_an_escalation_path():
+    identity = _identity(
+        allow("iam:PassRole", "arn:aws:iam::1:role/x"),
+        allow("lambda:CreateFunction"),
+        boundary=[allow("iam:PassRole", "arn:aws:iam::1:role/y"), allow("lambda:*")],
+    )
+    assert privilege_escalation_paths(identity) == []
+
+
+def test_root_trust_from_another_account_does_not_let_this_caller_assume_the_role():
+    caller = _identity(allow("sts:AssumeRole"))
+    foreign = _role("foreign", trusted_principals=["arn:aws:iam::2:root"], trust_is_broad=True)
+    local = _role("local", trusted_principals=["arn:aws:iam::1:root"], trust_is_broad=True)
+    assert assumable_roles(caller, [foreign, local]) == [local]
+
+
+def test_read_only_boundary_stops_a_workload_counting_as_able_to_act():
+    limited = _identity(
+        allow("bedrock:InvokeModel"), allow("s3:PutObject"), boundary=[allow("s3:Get*")]
+    )
+    assert can_act(limited) is False
+    wildcard = _identity(allow("*"), boundary=[allow("s3:GetObject")])
+    assert can_act(wildcard) is False
+    assert can_act(_identity(allow("s3:Put*"), boundary=[allow("s3:PutObject")])) is True
+    assert can_act(_identity(allow("s3:PutObject"), deny("s3:*"))) is False
+    assert can_act(_identity({"Effect": "Allow", "NotAction": "iam:*", "Resource": "*"})) is True
+
+
+def test_approved_tool_does_not_cover_a_directly_writable_saas_connection():
+    tool = Tool(name="t", type="action group", writes=True, requires_approval=True)
+    agent = Agent(
+        id="a",
+        name="a",
+        account_id="1",
+        region="eu-west-1",
+        platform=Platform.LAMBDA,
+        resource_arn="arn:a",
+        triggers=["human"],
+        tools=[tool],
+    )
+    assert estimate_scope(agent, [])[0] == 2
+    agent.saas = [SaasConnection(vendor="Slack", source="s", can_write=True)]
+    assert estimate_scope(agent, [])[0] == 3
+
+
 def _snapshot(identity, signal="config", **agent_kwargs):
     agent = Agent(
         id="a",
@@ -155,6 +290,126 @@ def _snapshot(identity, signal="config", **agent_kwargs):
         identities=[identity],
         stores=[store],
     )
+
+
+def test_grant_on_one_s3_prefix_is_found_and_labelled():
+    prefix = f"{BUCKET}/private/*"
+    grants = build_data_grants(_snapshot(_identity(allow("s3:GetObject", prefix))))
+    assert grants[0].levels == [AccessLevel.READ]
+    assert grants[0].limited_to == [prefix]
+
+
+def test_whole_bucket_grant_is_not_labelled_as_limited():
+    grants = build_data_grants(_snapshot(_identity(allow("s3:GetObject", f"{BUCKET}/*"))))
+    assert grants[0].limited_to == []
+
+
+def test_object_action_on_the_bucket_arn_alone_grants_nothing():
+    assert build_data_grants(_snapshot(_identity(allow("s3:GetObject", BUCKET)))) == []
+
+
+def test_each_level_keeps_the_route_that_allows_it():
+    caller = _identity(
+        allow("s3:GetObject", f"{BUCKET}/*"), allow("sts:AssumeRole", "arn:aws:iam::1:role/writer")
+    )
+    writer = _role("writer", allow("s3:PutObject", f"{BUCKET}/*"), trusted_principals=[caller.arn])
+    snapshot = _snapshot(caller)
+    snapshot.identities.append(writer)
+    grant = build_data_grants(snapshot)[0]
+    assert grant.levels == [AccessLevel.READ, AccessLevel.WRITE]
+    assert not grant.indirect
+    assert grant.indirect_levels == [AccessLevel.WRITE]
+    by_identity = {r.identity_arn: r for r in grant.routes}
+    assert by_identity[caller.arn].levels == [AccessLevel.READ]
+    assert by_identity[writer.arn].levels == [AccessLevel.WRITE]
+    assert by_identity[writer.arn].indirect
+
+
+def _rds_snapshot(identity):
+    snapshot = _snapshot(identity)
+    snapshot.stores = [
+        DataStore(
+            arn="arn:aws:rds:eu-west-1:1:db:prod",
+            name="prod",
+            type="RDS",
+            region="eu-west-1",
+            db_resource_id="db-ABC",
+        )
+    ]
+    return snapshot
+
+
+def test_rds_connect_is_checked_against_the_database_user_resource():
+    dbuser = "arn:aws:rds-db:eu-west-1:1:dbuser:db-ABC/app"
+    grants = build_data_grants(_rds_snapshot(_identity(allow("rds-db:connect", dbuser))))
+    assert grants[0].levels == [AccessLevel.READ]
+    assert grants[0].limited_to == [dbuser]
+    other = "arn:aws:rds-db:eu-west-1:1:dbuser:db-XYZ/app"
+    assert build_data_grants(_rds_snapshot(_identity(allow("rds-db:connect", other)))) == []
+
+
+SECRET_ARN = "arn:aws:secretsmanager:eu-west-1:1:secret:s-AbCdEf"
+
+
+def _secret_snapshot(identity, **agent_kwargs):
+    snapshot = _snapshot(identity, secret_arns=[SECRET_ARN], **agent_kwargs)
+    snapshot.secrets = [
+        Secret(
+            arn=SECRET_ARN,
+            name="s",
+            kind="Secrets Manager",
+            region="eu-west-1",
+            rotation_enabled=False,
+        )
+    ]
+    return snapshot
+
+
+def test_naming_a_secret_in_config_is_not_permission_to_read_it():
+    snapshot = _secret_snapshot(_identity())
+    assert build_secret_grants(snapshot)[0].authorized is False
+    result = analyse(snapshot, NOW)
+    assert not [f for f in result.findings if f.rule_id == "AIP-303"]
+
+
+def test_a_role_that_fetches_secrets_for_the_agent_counts_as_access():
+    fetcher = _role("exec", allow("secretsmanager:GetSecretValue", SECRET_ARN))
+    snapshot = _secret_snapshot(_identity(), secret_fetch_role_arns=[fetcher.arn])
+    snapshot.identities.append(fetcher)
+    grant = build_secret_grants(snapshot)[0]
+    assert grant.authorized is True
+    assert grant.identity_arn == fetcher.arn
+    assert any(f.rule_id == "AIP-303" for f in analyse(snapshot, NOW).findings)
+
+
+def test_failed_inventory_means_not_assessed_instead_of_a_clean_pass():
+    identity = _identity(allow("bedrock:InvokeModel"))
+    clean = analyse(_snapshot(identity), NOW)
+    data = next(d for d in clean.agents[0].domains if d.domain.value == "data")
+    snapshot = _snapshot(identity)
+    snapshot.stores = []
+    snapshot.coverage = [Coverage(source="S3", status=CoverageStatus.ACCESS_DENIED)]
+    result = analyse(snapshot, NOW)
+    denied = next(d for d in result.agents[0].domains if d.domain.value == "data")
+    assert denied.score is None
+    assert denied.assessed < data.assessed
+    assert result.agents[0].trifecta.sensitive_data.state is None
+
+
+def test_findings_still_count_when_inventory_is_partial():
+    identity = _identity(allow("s3:PutObject", f"{BUCKET}/*"))
+    snapshot = _snapshot(identity)
+    snapshot.coverage = [Coverage(source="DynamoDB", status=CoverageStatus.THROTTLED)]
+    result = analyse(snapshot, NOW)
+    assert any(f.rule_id == "AIP-202" for f in result.findings)
+    assert next(d for d in result.agents[0].domains if d.domain.value == "data").score is not None
+
+
+def test_a_service_that_is_switched_off_does_not_block_the_assessment():
+    snapshot = _snapshot(_identity(allow("bedrock:InvokeModel")))
+    snapshot.coverage = [Coverage(source="Macie", status=CoverageStatus.NOT_ENABLED)]
+    result = analyse(snapshot, NOW)
+    assert next(d for d in result.agents[0].domains if d.domain.value == "data").score is not None
 
 
 def test_model_only_workload_is_a_model_consumer_not_an_agent():

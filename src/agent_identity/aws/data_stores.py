@@ -6,10 +6,12 @@ import json
 import re
 from typing import Any
 
+from botocore.exceptions import ClientError
+
 from agent_identity.analysis.permissions import parse_policy
-from agent_identity.aws.base import CoverageLog, attempt, quiet
+from agent_identity.aws.base import CALL_FAILURES, CoverageLog, attempt, quiet
 from agent_identity.aws.session import client
-from agent_identity.models import DataStore, Sensitivity
+from agent_identity.models import CoverageStatus, DataStore, Domain, Sensitivity
 
 _MAX_BUCKETS = 200
 _CLASSIFICATION_TAGS = (
@@ -68,6 +70,18 @@ def _other_accounts(document: dict | None, account_id: str) -> list[str]:
     return sorted(set(principals))
 
 
+def _bucket_policy_read(call: Any) -> tuple[Any, bool]:
+    """Return (value, known). Having no policy is an answer. Being refused one is not."""
+    try:
+        return call(), True
+    except CALL_FAILURES as error:
+        missing = (
+            isinstance(error, ClientError)
+            and error.response.get("Error", {}).get("Code") == "NoSuchBucketPolicy"
+        )
+        return None, missing
+
+
 def collect_s3(
     session: Any, account_id: str, data_events: set[str] | None, coverage: CoverageLog
 ) -> list[DataStore]:
@@ -75,6 +89,14 @@ def collect_s3(
     buckets, _ = attempt(
         coverage, "S3", "global", lambda: default.list_buckets().get("Buckets", []), []
     )
+    if len(buckets) > _MAX_BUCKETS:
+        coverage.gap(
+            "S3",
+            "global",
+            CoverageStatus.ERROR,
+            f"Only the first {_MAX_BUCKETS} of {len(buckets)} buckets were checked",
+            [Domain.DATA],
+        )
     stores = []
     for bucket in buckets[:_MAX_BUCKETS]:
         name = bucket["Name"]
@@ -93,10 +115,12 @@ def collect_s3(
         for rule in encryption or []:
             default_rule = rule.get("ApplyServerSideEncryptionByDefault") or {}
             kms_key = default_rule.get("KMSMasterKeyID") or kms_key
-        status = quiet(
+        status, status_known = _bucket_policy_read(
             lambda n=name, api=api: api.get_bucket_policy_status(Bucket=n)["PolicyStatus"]
         )
-        policy_text = quiet(lambda n=name, api=api: api.get_bucket_policy(Bucket=n)["Policy"])
+        policy_text, policy_known = _bucket_policy_read(
+            lambda n=name, api=api: api.get_bucket_policy(Bucket=n)["Policy"]
+        )
         document = json.loads(policy_text) if policy_text else None
         arn = f"arn:aws:s3:::{name}"
         logged = None
@@ -112,8 +136,10 @@ def collect_s3(
                 sensitivity_source=source,
                 encrypted=True if encryption else None,
                 kms_key_arn=kms_key if kms_key and kms_key.startswith("arn:") else None,
-                public=status.get("IsPublic") if status else False if policy_text is None else None,
-                cross_account_principals=_other_accounts(document, account_id),
+                public=(status or {}).get("IsPublic", False) if status_known else None,
+                cross_account_principals=(
+                    _other_accounts(document, account_id) if policy_known else None
+                ),
                 resource_policy=parse_policy("Bucket policy", document) if document else None,
                 logs_data_access=logged,
             )
@@ -136,6 +162,13 @@ def collect_dynamodb(session: Any, region: str, coverage: CoverageLog) -> list[D
     for table in tables:
         info = quiet(lambda t=table: api.describe_table(TableName=t)["Table"])
         if info is None:
+            coverage.gap(
+                "DynamoDB",
+                region,
+                CoverageStatus.ERROR,
+                f"Couldn't describe table {table}",
+                [Domain.DATA],
+            )
             continue
         tags_response = quiet(
             lambda a=info["TableArn"]: api.list_tags_of_resource(ResourceArn=a), {}
@@ -189,6 +222,7 @@ def collect_rds(session: Any, region: str, coverage: CoverageLog) -> list[DataSt
                 region=region,
                 sensitivity=sensitivity,
                 sensitivity_source=source,
+                db_resource_id=cluster.get("DbClusterResourceId"),
                 encrypted=cluster.get("StorageEncrypted"),
                 kms_key_arn=cluster.get("KmsKeyId"),
                 public=cluster.get("PubliclyAccessible"),
@@ -208,6 +242,7 @@ def collect_rds(session: Any, region: str, coverage: CoverageLog) -> list[DataSt
                 region=region,
                 sensitivity=sensitivity,
                 sensitivity_source=source,
+                db_resource_id=instance.get("DbiResourceId"),
                 encrypted=instance.get("StorageEncrypted"),
                 kms_key_arn=instance.get("KmsKeyId"),
                 public=instance.get("PubliclyAccessible"),

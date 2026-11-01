@@ -40,8 +40,29 @@ DOMAIN_WEIGHT = {
 CRITICAL_CAP = 40
 HIGH_CAP = 70
 
+# If one of these lists fails, finding nothing in that domain doesn't mean there's nothing to find.
+_INVENTORY_SOURCES = {
+    Domain.IDENTITY: {"IAM"},
+    Domain.DATA: {"IAM", "S3", "DynamoDB", "RDS", "Bedrock knowledge bases", "AgentCore memory"},
+    Domain.SECRETS: {
+        "IAM",
+        "Secrets Manager",
+        "SSM Parameter Store",
+        "AgentCore OAuth providers",
+        "AgentCore API key providers",
+    },
+}
+_INCOMPLETE = {CoverageStatus.ACCESS_DENIED, CoverageStatus.THROTTLED, CoverageStatus.ERROR}
 
-def compute_trifecta(agent: Agent, grants: list[DataGrant], stores: dict) -> Trifecta:
+
+def incomplete_domains(snapshot: Snapshot) -> set[Domain]:
+    failed = {c.source for c in snapshot.coverage if c.status in _INCOMPLETE}
+    return {domain for domain, sources in _INVENTORY_SOURCES.items() if sources & failed}
+
+
+def compute_trifecta(
+    agent: Agent, grants: list[DataGrant], stores: dict, data_complete: bool = True
+) -> Trifecta:
     readable = [g for g in grants if AccessLevel.READ in g.levels or AccessLevel.ADMIN in g.levels]
     sensitive = [g for g in readable if stores[g.store_arn].sensitivity in SENSITIVE]
     unclassified = [g for g in readable if stores[g.store_arn].sensitivity.value == "unknown"]
@@ -60,6 +81,8 @@ def compute_trifecta(agent: Agent, grants: list[DataGrant], stores: dict) -> Tri
         )
     elif agent.identity_arn is None:
         data = TrifectaLeg(state=None, reasons=["Its identity could not be determined"])
+    elif not data_complete:
+        data = TrifectaLeg(state=None, reasons=["Some data stores or roles could not be listed"])
     else:
         data = TrifectaLeg(state=False, reasons=["No sensitive data found within reach"])
 
@@ -132,6 +155,7 @@ def analyse(snapshot: Snapshot, now: datetime | None = None) -> Result:
     grants = data_access.build_data_grants(snapshot)
     secret_grants = data_access.build_secret_grants(snapshot)
     domain_info = domains.build_domains(snapshot.agents)
+    incomplete = incomplete_domains(snapshot)
     unknown_hosts = {d.hostname for d in domain_info if d.category == "Unknown"}
 
     agent_results: list[AgentResult] = []
@@ -142,7 +166,7 @@ def analyse(snapshot: Snapshot, now: datetime | None = None) -> Result:
         identity = identities.get(agent.identity_arn or "")
         own_grants = [g for g in grants if g.agent_id == agent.id]
         own_secret_grants = [g for g in secret_grants if g.agent_id == agent.id]
-        trifecta = compute_trifecta(agent, own_grants, stores)
+        trifecta = compute_trifecta(agent, own_grants, stores, Domain.DATA not in incomplete)
         scope, scope_reasons = autonomy.estimate_scope(agent, own_grants)
         admin = identity is not None and permissions.is_admin_equivalent(identity)
         privesc = permissions.privilege_escalation_paths(identity) if identity else []
@@ -191,7 +215,7 @@ def analyse(snapshot: Snapshot, now: datetime | None = None) -> Result:
             bucket["total"] += 1
             total_runs += 1
             hits = rule.fn(ctx)
-            if hits is None:
+            if hits is None or (not hits and rule.domain in incomplete):
                 continue
             bucket["assessed"] += 1
             assessed_runs += 1

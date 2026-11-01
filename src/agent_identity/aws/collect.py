@@ -83,7 +83,7 @@ def _identity_agent(
     identity: Identity, evidence: list[Evidence], use: cloudtrail.ModelUse | None = None
 ) -> Agent:
     return Agent(
-        id=f"iam-{identity.name}",
+        id=f"iam-{identity.kind}-{identity.name}",
         name=identity.name,
         account_id=identity.account_id,
         region="global",
@@ -150,7 +150,7 @@ def _simulate(
             for store in stores:
                 for actions in data_access.STORE_ACTIONS.get(store.type, {}).values():
                     for action in actions:
-                        for resource in data_access._resources_for(store):
+                        for resource in data_access.resources_to_check(identity, store, action):
                             if permissions.evaluate(
                                 identity, action, resource, store.resource_policy
                             ).allowed:
@@ -171,19 +171,18 @@ def _simulate(
     return results
 
 
+def _secret_matches(secret: Secret, ref: str, region: str) -> bool:
+    if secret.arn == ref or secret.arn.startswith(ref) or ref.startswith(secret.arn):
+        return True
+    return secret.kind == "SSM SecureString" and secret.name == ref and secret.region == region
+
+
 def _link_secret_refs(agents: list[Agent], secret_list: list[Secret]) -> None:
     """Config can name a secret by a partial ARN or a parameter path. Match it to the real one."""
     for agent in agents:
         resolved = []
         for ref in agent.secret_arns:
-            match = next(
-                (
-                    s
-                    for s in secret_list
-                    if s.arn == ref or s.arn.startswith(ref) or ref.startswith(s.arn)
-                ),
-                None,
-            )
+            match = next((s for s in secret_list if _secret_matches(s, ref, agent.region)), None)
             if match is None:
                 continue
             resolved.append(match.arn)
@@ -236,7 +235,7 @@ def collect_snapshot(settings: Settings) -> Snapshot:
     data_events: set[str] | None = None
 
     for region in settings.scan_regions:
-        net = network.RegionNetwork(session, region)
+        net = network.RegionNetwork(session, region, coverage)
         workloads += compute.collect_lambda(session, region, account_id, net, coverage)
         workloads += compute.collect_ecs(session, region, account_id, net, coverage)
         workloads += compute.collect_eks(session, region, account_id, coverage)

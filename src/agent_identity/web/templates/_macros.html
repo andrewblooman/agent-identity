@@ -1,3 +1,5 @@
+{% macro routes(g) %}{% if g.routes|length > 1 %}<ul class="plain">{% for r in g.routes %}<li>{{ r.levels|map(attribute='value')|join(', ')|capitalize }}: {{ r.path|join(', then ') }}</li>{% endfor %}</ul>{% else %}{{ g.path|join(', then ') }}{% endif %}{% if g.limited_to %}<div class="sub">Only on: {{ g.limited_to|join(', ') }}</div>{% endif %}{% endmacro %}
+
 {% macro sev(severity) %}{% set s = severity.value if severity.value is defined else severity %}<span class="sev"><span class="dot bg-{{ s }}" aria-hidden="true"></span>{{ s|capitalize }}</span>{% endmacro %}
 
 {% macro glyph(trifecta, size=40) %}{% set g = charts.trifecta_glyph(trifecta) %}

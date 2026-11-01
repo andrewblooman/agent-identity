@@ -55,6 +55,20 @@ def _policy_index(details: dict[str, Any]) -> dict[str, Policy]:
     return index
 
 
+def _group_policies(
+    user: dict[str, Any], groups: dict[str, dict[str, Any]], index: dict[str, Policy]
+) -> list[Policy]:
+    """A user also holds everything attached to the groups it's in."""
+    policies = []
+    for name in user.get("GroupList", []):
+        if name in groups:
+            policies += [
+                policy.model_copy(update={"name": f"{policy.name} (group {name})"})
+                for policy in _attached(groups[name], index, "GroupPolicyList")
+            ]
+    return policies
+
+
 def _attached(item: dict[str, Any], index: dict[str, Policy], inline_key: str) -> list[Policy]:
     policies = [
         index.get(p["PolicyArn"]) or Policy(name=p["PolicyName"], arn=p["PolicyArn"])
@@ -69,13 +83,19 @@ def _attached(item: dict[str, Any], index: dict[str, Policy], inline_key: str) -
 def collect_identities(session: Any, account_id: str) -> tuple[list[Identity], dict[str, str]]:
     """Return identities and a map of instance profile ARN to role ARN."""
     iam = client(session, "iam")
-    details: dict[str, list] = {"RoleDetailList": [], "UserDetailList": [], "Policies": []}
+    details: dict[str, list] = {
+        "RoleDetailList": [],
+        "UserDetailList": [],
+        "GroupDetailList": [],
+        "Policies": [],
+    }
     for page in iam.get_paginator("get_account_authorization_details").paginate(
-        Filter=["Role", "User", "LocalManagedPolicy", "AWSManagedPolicy"]
+        Filter=["Role", "User", "Group", "LocalManagedPolicy", "AWSManagedPolicy"]
     ):
         for key in details:
             details[key].extend(page.get(key, []))
     index = _policy_index(details)
+    groups = {g["GroupName"]: g for g in details["GroupDetailList"]}
     identities: list[Identity] = []
     profiles: dict[str, str] = {}
     for role in details["RoleDetailList"]:
@@ -108,7 +128,10 @@ def collect_identities(session: Any, account_id: str) -> tuple[list[Identity], d
                 kind="user",
                 account_id=account_id,
                 created=user.get("CreateDate"),
-                policies=_attached(user, index, "UserPolicyList"),
+                policies=[
+                    *_attached(user, index, "UserPolicyList"),
+                    *_group_policies(user, groups, index),
+                ],
                 boundary=index.get(boundary_arn) if boundary_arn else None,
             )
         )
@@ -135,6 +158,15 @@ def add_access_keys(session: Any, identity: Identity) -> None:
         )
 
 
+def _remaining_last_accessed(iam: Any, job_id: str, first: dict[str, Any]) -> list[dict]:
+    services = list(first.get("ServicesLastAccessed", []))
+    page = first
+    while page.get("IsTruncated"):
+        page = iam.get_service_last_accessed_details(JobId=job_id, Marker=page["Marker"])
+        services += page.get("ServicesLastAccessed", [])
+    return services
+
+
 def add_last_accessed(session: Any, identities: list[Identity], timeout: float = 30) -> None:
     """IAM last-accessed reports take seconds to build, so start them all, then collect them."""
     iam = client(session, "iam")
@@ -150,10 +182,12 @@ def add_last_accessed(session: Any, identities: list[Identity], timeout: float =
             if result is None or result.get("JobStatus") == "FAILED":
                 del jobs[arn]
             elif result.get("JobStatus") == "COMPLETED":
-                identity.service_last_used = {
-                    s["ServiceNamespace"]: s.get("LastAuthenticated")
-                    for s in result.get("ServicesLastAccessed", [])
-                }
+                # A partial report would make services on later pages look unused.
+                services = quiet(lambda j=job_id, r=result: _remaining_last_accessed(iam, j, r))
+                if services is not None:
+                    identity.service_last_used = {
+                        s["ServiceNamespace"]: s.get("LastAuthenticated") for s in services
+                    }
                 del jobs[arn]
         if jobs:
             time.sleep(1)
@@ -175,4 +209,7 @@ def simulate(
         )
         for item in response.get("EvaluationResults", []):
             allowed = item.get("EvalDecision") == "allowed"
+            # The request sends no context, so a denial that needed some isn't a real answer.
+            if not allowed and item.get("MissingContextValues"):
+                continue
             results[f"{identity.arn}|{item['EvalActionName']}|{resource}"] = allowed

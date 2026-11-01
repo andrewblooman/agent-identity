@@ -99,7 +99,7 @@ ALLOWED_OPERATIONS: dict[str, frozenset[str]] = {
     "rds": frozenset({"DescribeDBInstances", "DescribeDBClusters"}),
     "accessanalyzer": frozenset({"ListAnalyzers"}),
     "macie2": frozenset({"GetMacieSession", "DescribeBuckets"}),
-    "inspector2": frozenset({"BatchGetAccountStatus", "ListFindings"}),
+    "inspector2": frozenset({"BatchGetAccountStatus", "ListCoverage", "ListFindings"}),
     "route53resolver": frozenset({"ListResolverQueryLogConfigs"}),
     "logs": frozenset({"FilterLogEvents"}),
 }

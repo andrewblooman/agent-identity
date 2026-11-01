@@ -114,6 +114,18 @@ def hostnames_in(value: str) -> list[str]:
     return hosts
 
 
+def endpoint_origin(url: str) -> str:
+    """Keep only the scheme and host. User info, paths and queries can all hold credentials."""
+    try:
+        parts = urlsplit(url)
+        host, port = parts.hostname, parts.port
+    except ValueError:
+        return "external endpoint"
+    if not parts.scheme or not host:
+        return "external endpoint"
+    return f"{parts.scheme}://{host}" + (f":{port}" if port else "")
+
+
 def inspect_env(location: str, env: Mapping[str, str] | None) -> EnvSignals:
     signals = EnvSignals()
     for name, value in (env or {}).items():

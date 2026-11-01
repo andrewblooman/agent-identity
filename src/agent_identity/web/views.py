@@ -463,7 +463,7 @@ def data_access(estate: Estate, params: dict[str, str]) -> dict:
         "use": use,
         "poison": poison,
         "victims": victims,
-        "indirect": [g for g in sensitive_grants if g.indirect],
+        "indirect": [g for g in sensitive_grants if g.indirect or g.indirect_levels],
         "unused": [g for g in sensitive_grants if g.use == "unused"],
         "conditional": [g for g in estate.result.grants if g.conditional],
     }
@@ -498,6 +498,10 @@ def store_detail(estate: Estate, arn: str) -> dict:
     }
 
 
+def _goes_through(grant: DataGrant, arn: str) -> bool:
+    return grant.identity_arn == arn or any(r.identity_arn == arn for r in grant.routes)
+
+
 def _identity_summary(estate: Estate, identity) -> dict:
     agents_using = [
         a
@@ -515,10 +519,14 @@ def _identity_summary(estate: Estate, identity) -> dict:
         "unused": unused,
         "used_count": sum(v is not None for v in used.values()) if used is not None else None,
         "store_count": len(
-            {g.store_arn for g in estate.result.grants if g.identity_arn == identity.arn}
+            {g.store_arn for g in estate.result.grants if _goes_through(g, identity.arn)}
         ),
         "secret_count": len(
-            {g.secret_arn for g in estate.result.secret_grants if g.identity_arn == identity.arn}
+            {
+                g.secret_arn
+                for g in estate.result.secret_grants
+                if g.identity_arn == identity.arn and g.authorized is not False
+            }
         ),
     }
 
@@ -544,12 +552,16 @@ def identity(estate: Estate) -> dict:
 
 
 def identity_detail(estate: Estate, arn: str) -> dict:
-    grants = [g for g in estate.result.grants if g.identity_arn == arn]
+    grants = [g for g in estate.result.grants if _goes_through(g, arn)]
     return {
         "summary": _identity_summary(estate, estate.identities[arn]),
         "grants": grants,
         "strongest": _strongest,
-        "secret_grants": [g for g in estate.result.secret_grants if g.identity_arn == arn],
+        "secret_grants": [
+            g
+            for g in estate.result.secret_grants
+            if g.identity_arn == arn and g.authorized is not False
+        ],
         "findings": [
             f for f in estate.result.findings if f.domain == Domain.IDENTITY and f.subject == arn
         ],

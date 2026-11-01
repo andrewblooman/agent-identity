@@ -9,7 +9,7 @@ from __future__ import annotations
 import re
 
 from agent_identity.analysis import permissions
-from agent_identity.models import Agent, AgentKind, Confidence, Identity, Platform
+from agent_identity.models import Agent, AgentKind, Confidence, Identity, Platform, Policy
 
 _WRITE_VERB = re.compile(
     r"^(?:\*|Put|Create|Update|Delete|Send|Publish|Write|Start|Run|Modify|Attach|Pass|Batch.*Write"
@@ -18,6 +18,8 @@ _WRITE_VERB = re.compile(
 )
 # Writing to these is how a workload runs at all, so it doesn't count as being able to act.
 _PLUMBING = {"logs", "xray", "cloudwatch", "ec2messages", "ssmmessages", "kms", "sts"}
+# A NotAction allow names no write action, so test it with some common ones.
+_WRITE_PROBES = ("s3:PutObject", "dynamodb:PutItem", "lambda:InvokeFunction", "sns:Publish")
 _MODEL_ACTIONS = (
     "bedrock:InvokeModel",
     "bedrock:InvokeModelWithResponseStream",
@@ -27,24 +29,43 @@ _MANAGED_PLATFORMS = {Platform.BEDROCK_AGENT, Platform.AGENTCORE}
 MODEL_SIGNALS = {"managed", "behaviour", "config"}
 
 
+def _is_write_action(action: str) -> bool:
+    if action == "*":
+        return True
+    service, _, verb = action.partition(":")
+    if service.lower() in _PLUMBING:
+        return False
+    if service.lower() == "ec2" and "NetworkInterface" in verb:
+        return False
+    return bool(_WRITE_VERB.match(verb))
+
+
+def _write_actions(policies: list[Policy]) -> list[str]:
+    found: list[str] = []
+    for policy in policies:
+        for stmt in policy.statements:
+            if stmt.effect == "Allow":
+                found += [a for a in stmt.actions if _is_write_action(a)]
+                if stmt.not_actions:
+                    found += _WRITE_PROBES
+    return found
+
+
 def can_act(identity: Identity | None) -> bool | None:
+    """True if a write action survives explicit denies and the permission boundary."""
     if identity is None:
         return None
-    for policy in identity.policies:
-        for stmt in policy.statements:
-            if stmt.effect != "Allow":
-                continue
-            for action in stmt.actions:
-                service, _, verb = action.partition(":")
-                if action == "*":
-                    return True
-                if service.lower() in _PLUMBING:
-                    continue
-                if service.lower() == "ec2" and "NetworkInterface" in verb:
-                    continue
-                if _WRITE_VERB.match(verb or ""):
-                    return True
-    return False
+    actions = _write_actions(identity.policies)
+    if identity.boundary is not None:
+        # s3:* under a read-only boundary can't write, so a write must be in both.
+        limits = _write_actions([identity.boundary])
+        actions = [
+            limit if permissions.matches(action, limit) else action
+            for action in actions
+            for limit in limits
+            if permissions.patterns_overlap(action.lower(), limit.lower())
+        ]
+    return any(permissions.allows_action_on_any_resource(identity, a) for a in actions)
 
 
 def has_explicit_model_access(identity: Identity) -> bool:

@@ -83,13 +83,10 @@ def _tool(api: Any, agent_id: str, summary: dict) -> Tool | None:
         )
     executor = group.get("actionGroupExecutor") or {}
     functions = (group.get("functionSchema") or {}).get("functions") or []
-    approvals = [f.get("requireConfirmation") == "ENABLED" for f in functions]
-    if executor.get("customControl") == "RETURN_CONTROL":
-        approval: bool | None = True
-    elif functions:
-        approval = all(approvals)
-    else:
-        approval = None
+    # RETURN_CONTROL hands the call to the app, which may run it unattended, so it isn't approval.
+    approval = (
+        all(f.get("requireConfirmation") == "ENABLED" for f in functions) if functions else None
+    )
     return Tool(
         name=group.get("actionGroupName", "unknown"),
         type="action group",

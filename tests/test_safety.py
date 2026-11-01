@@ -7,7 +7,12 @@ import boto3
 import pytest
 from botocore.exceptions import ClientError
 
-from agent_identity.analysis.redaction import fingerprint_instructions, inspect_env, mask_key_id
+from agent_identity.analysis.redaction import (
+    endpoint_origin,
+    fingerprint_instructions,
+    inspect_env,
+    mask_key_id,
+)
 from agent_identity.aws.base import CoverageLog, attempt
 from agent_identity.aws.session import ALLOWED_OPERATIONS, BlockedOperationError, create_session
 from agent_identity.models import CoverageStatus
@@ -154,6 +159,19 @@ def test_references_and_flags_are_not_reported_as_secrets(value):
 def test_secret_arns_in_env_are_kept_as_references():
     arn = "arn:aws:secretsmanager:eu-west-1:111122223333:secret:prod/key"
     assert inspect_env("x", {"KEY_ARN": arn}).secret_refs == [arn]
+
+
+@pytest.mark.parametrize(
+    ("url", "kept"),
+    [
+        ("https://user:hunter2@mcp.example.com/sse?api_key=hunter2", "https://mcp.example.com"),
+        ("https://mcp.example.com:8443/hunter2", "https://mcp.example.com:8443"),
+        ("not a url hunter2", "external endpoint"),
+        ("https://[bad/hunter2", "external endpoint"),
+    ],
+)
+def test_endpoints_keep_only_their_origin(url, kept):
+    assert endpoint_origin(url) == kept
 
 
 def test_instructions_keep_only_a_fingerprint():

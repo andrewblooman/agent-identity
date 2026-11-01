@@ -13,7 +13,7 @@
 </dl>
 <h2>{{ grants|length }} agents can reach this</h2>
 {% if grants %}<div class="table-scroll"><table><thead><tr><th>Agent</th><th>Strongest access</th><th>All access</th><th>Used?</th><th>Route</th></tr></thead><tbody>
-{% for g in grants %}<tr><td><a href="/agents/{{ g.agent_id|q }}">{{ estate.agents[g.agent_id].name }}</a></td><td>{{ m.levels(g, strongest) }}{% if g.conditional %}<div class="sub">Conditional</div>{% endif %}</td><td>{{ g.levels|map(attribute='value')|join(', ')|capitalize }}</td><td>{{ g.use|capitalize }}<div class="sub">{{ g.use_detail }}</div></td><td>{{ g.path|join(', then ') }}</td></tr>{% endfor %}
+{% for g in grants %}<tr><td><a href="/agents/{{ g.agent_id|q }}">{{ estate.agents[g.agent_id].name }}</a></td><td>{{ m.levels(g, strongest) }}{% if g.conditional %}<div class="sub">Conditional</div>{% endif %}</td><td>{{ g.levels|map(attribute='value')|join(', ')|capitalize }}</td><td>{{ g.use|capitalize }}<div class="sub">{{ g.use_detail }}</div></td><td>{{ m.routes(g) }}</td></tr>{% endfor %}
 </tbody></table></div>{% else %}<p>No agent can reach this store.</p>{% endif %}
 {% if consumers %}<h2>Agents that read this as context</h2><ul class="plain">{% for a in consumers %}<li><a href="/agents/{{ a.id|q }}">{{ a.name }}</a></li>{% endfor %}</ul>{% endif %}
 {% if sources %}<h2>Built from</h2><ul class="plain">{% for s in sources %}<li><a href="/data/store?arn={{ s.arn|q }}">{{ s.name }}</a></li>{% endfor %}</ul>{% endif %}

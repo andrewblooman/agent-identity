@@ -95,6 +95,9 @@ class Statement(BaseModel):
     resources: list[str] = Field(default_factory=list)
     not_resources: list[str] = Field(default_factory=list)
     conditional: bool = False
+    # Who a resource policy statement applies to. Both are empty on identity policy statements.
+    principals: list[str] = Field(default_factory=list)
+    not_principals: list[str] = Field(default_factory=list)
 
 
 class Policy(BaseModel):
@@ -144,6 +147,7 @@ class DataStore(BaseModel):
     cross_account_principals: list[str] | None = None
     resource_policy: Policy | None = None
     source_store_arns: list[str] = Field(default_factory=list)  # e.g. KB -> bucket
+    db_resource_id: str | None = None  # RDS only: what rds-db:connect policies are written against
     logs_data_access: bool | None = None
 
 
@@ -183,7 +187,7 @@ class NetworkProfile(BaseModel):
     egress_detail: str = ""
     vpc_id: str | None = None
     in_vpc: bool | None = None
-    open_security_groups: list[str] = Field(default_factory=list)
+    open_security_groups: list[str] | None = Field(default_factory=list)
     vpc_endpoints: list[str] | None = None
 
 
@@ -235,7 +239,7 @@ class SaasConnection(BaseModel):
 class DomainRef(BaseModel):
     hostname: str
     source: str
-    observed: bool = False
+    observed: bool = False  # Queried from the agent's VPC, though maybe not by the agent itself
 
 
 class Agent(BaseModel):
@@ -259,6 +263,8 @@ class Agent(BaseModel):
     knowledge_base_arns: list[str] = Field(default_factory=list)
     memory_arns: list[str] = Field(default_factory=list)
     secret_arns: list[str] = Field(default_factory=list)  # referenced in config
+    # Roles that fetch those secrets for the agent, such as an ECS task execution role.
+    secret_fetch_role_arns: list[str] = Field(default_factory=list)
     plaintext_secrets: list[PlaintextSecret] = Field(default_factory=list)
     domains: list[DomainRef] = Field(default_factory=list)
     saas: list[SaasConnection] = Field(default_factory=list)
@@ -305,11 +311,31 @@ class AccessPath(BaseModel):
     indirect: bool = False
 
 
+class GrantRoute(BaseModel):
+    """One way an agent reaches a store, with exactly what that way allows."""
+
+    identity_arn: str
+    levels: list[AccessLevel]
+    path: list[str] = Field(default_factory=list)
+    indirect: bool = False
+    conditional: bool = False
+    verified: bool = False
+    blocked_by_kms: bool = False
+    limited_to: list[str] = Field(default_factory=list)  # Narrower than the whole store
+    use: str = "unknown"
+    use_detail: str = ""
+
+
 class DataGrant(BaseModel):
+    """Every route from one agent to one store. The top-level fields summarise `routes`."""
+
     agent_id: str
     identity_arn: str
     store_arn: str
     levels: list[AccessLevel]
+    routes: list[GrantRoute] = Field(default_factory=list)
+    indirect_levels: list[AccessLevel] = Field(default_factory=list)  # No direct route to these
+    limited_to: list[str] = Field(default_factory=list)
     conditional: bool = False
     verified: bool = False  # confirmed by SimulatePrincipalPolicy
     blocked_by_kms: bool = False
@@ -326,6 +352,8 @@ class SecretGrant(BaseModel):
     conditional: bool = False
     indirect: bool = False
     referenced: bool = False
+    # False when config names the secret but no permission was found. None when it couldn't be told.
+    authorized: bool | None = True
     path: list[str] = Field(default_factory=list)
 
 

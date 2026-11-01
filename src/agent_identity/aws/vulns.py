@@ -13,13 +13,28 @@ from typing import Any
 from agent_identity.aws.base import CoverageLog, attempt
 from agent_identity.aws.session import client
 from agent_identity.config import Settings
-from agent_identity.models import Agent, CoverageStatus, Severity, Vulnerability
+from agent_identity.models import (
+    Agent,
+    CoverageStatus,
+    Domain,
+    Platform,
+    Severity,
+    Vulnerability,
+)
 
 log = logging.getLogger(__name__)
 
 _ECR_IMAGE = re.compile(
     r"^\d{12}\.dkr\.ecr\.[a-z0-9-]+\.amazonaws\.com/[a-z0-9._/-]+"
     r"(?::[A-Za-z0-9_.-]+|@sha256:[a-f0-9]{64})?$"
+)
+_DEPLOYED_IMAGE = re.compile(
+    r"^(?P<registry>\d{12})\.dkr\.ecr\.(?P<region>[a-z0-9-]+)\.amazonaws\.com/"
+    r"(?P<repository>[a-z0-9._/-]+)(?::(?P<tag>[A-Za-z0-9_.-]+)|@(?P<digest>sha256:[a-f0-9]{64}))?$"
+)
+_COVERED_IMAGE = re.compile(
+    r"^arn:aws[a-z-]*:ecr:[a-z0-9-]+:(?P<registry>\d{12}):repository/"
+    r"(?P<repository>[a-z0-9._/-]+)/(?P<digest>sha256:[a-f0-9]+)$"
 )
 _SEVERITY = {
     "CRITICAL": Severity.CRITICAL,
@@ -64,20 +79,69 @@ def inspector_enabled(session: Any, region: str, coverage: CoverageLog) -> bool 
     )
     if not ok or response is None:
         return None
-    accounts = response.get("accounts", [])
-    return any((a.get("state") or {}).get("status") == "ENABLED" for a in accounts)
+    return any(
+        state.get("status") == "ENABLED"
+        for account in response.get("accounts", [])
+        for state in (
+            account.get("state") or {},
+            *(account.get("resourceState") or {}).values(),
+        )
+    )
+
+
+def _ecr_keys(registry: str, repository: str, digest: str | None, tags: list[str]) -> list[str]:
+    """The same repository can hold a patched image and a vulnerable one, so keys name the image."""
+    keys = [f"ecr:{registry}/{repository}:{tag}" for tag in tags]
+    if digest:
+        keys.append(f"ecr:{registry}/{repository}@{digest}")
+    return keys
 
 
 def _resource_key(resource: dict) -> list[str]:
     details = resource.get("details") or {}
     keys = [resource.get("id", "")]
     image = details.get("awsEcrContainerImage") or {}
-    if image.get("repositoryName"):
-        keys.append(f"ecr:{image['repositoryName']}")
+    if image.get("repositoryName") and image.get("registry"):
+        keys += _ecr_keys(
+            image["registry"],
+            image["repositoryName"],
+            image.get("imageHash"),
+            image.get("imageTags") or [],
+        )
     fn = details.get("awsLambdaFunction") or {}
     if fn.get("functionName"):
         keys.append(f"lambda:{fn['functionName']}")
     return keys
+
+
+def _covered_keys(item: dict) -> list[str]:
+    """How to recognise a resource from ListCoverage, if Inspector is actively scanning it."""
+    if (item.get("scanStatus") or {}).get("statusCode") != "ACTIVE":
+        return []
+    resource_id = item.get("resourceId", "")
+    metadata = item.get("resourceMetadata") or {}
+    image = _COVERED_IMAGE.match(resource_id)
+    if image:
+        tags = (metadata.get("ecrImage") or {}).get("imageTags") or []
+        return _ecr_keys(image["registry"], image["repository"], image["digest"], tags)
+    if item.get("resourceType") == "ECR_REPOSITORY":
+        return []  # Scanning a repository doesn't show that any one image has been scanned.
+    function = (metadata.get("lambdaFunction") or {}).get("functionName")
+    return [resource_id, *([f"lambda:{function}"] if function else [])]
+
+
+def _agent_keys(agent: Agent, region: str) -> list[str]:
+    if agent.runtime.image:
+        image = _DEPLOYED_IMAGE.match(agent.runtime.image)
+        if image is None or image["region"] != region:
+            return []
+        tags = [] if image["digest"] else [image["tag"] or "latest"]
+        return _ecr_keys(image["registry"], image["repository"], image["digest"], tags)
+    if agent.platform == Platform.LAMBDA:
+        return [agent.resource_arn, f"lambda:{agent.name}"]
+    if agent.platform == Platform.EC2:
+        return [agent.resource_arn.rsplit("/", 1)[-1]]
+    return []
 
 
 def apply_inspector(session: Any, region: str, agents: list[Agent], coverage: CoverageLog) -> None:
@@ -103,16 +167,26 @@ def apply_inspector(session: Any, region: str, agents: list[Agent], coverage: Co
                             found.setdefault(key, []).append(vuln)
         return found
 
+    def load_coverage() -> set[str]:
+        pages = api.get_paginator("list_coverage").paginate(PaginationConfig={"MaxItems": 5000})
+        return {
+            key
+            for page in pages
+            for item in page.get("coveredResources", [])
+            for key in _covered_keys(item)
+        }
+
     found, ok = attempt(coverage, "Inspector", region, load, {})
     if not ok:
         return
+    covered, _ = attempt(
+        coverage, "Inspector coverage", region, load_coverage, set(), [Domain.RUNTIME], False
+    )
     for agent in agents:
-        keys = [agent.resource_arn, f"lambda:{agent.name}", agent.resource_arn.rsplit("/", 1)[-1]]
-        if agent.runtime.image and "/" in agent.runtime.image:
-            repository = re.split(r"[:@]", agent.runtime.image.split("/", 1)[1])[0]
-            keys.append(f"ecr:{repository}")
+        keys = _agent_keys(agent, region)
         matches = [v for key in keys for v in found.get(key, [])]
-        if matches or agent.runtime.image or agent.platform.value in ("Lambda", "EC2"):
+        # No findings only means something if Inspector is actually scanning this resource.
+        if matches or covered.intersection(keys):
             agent.runtime.vulnerabilities = _dedupe(matches)
             agent.runtime.vulns_assessed = True
             agent.runtime.vulns_source = "Inspector"

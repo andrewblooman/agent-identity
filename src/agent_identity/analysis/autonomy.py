@@ -40,7 +40,10 @@ def estimate_scope(agent: Agent, grants: list[DataGrant]) -> tuple[int | None, l
     if not can_write:
         return 1, ["No write capability found", *reasons]
     all_approved = (
-        not write_grants and write_tools and all(t.requires_approval for t in write_tools)
+        not write_grants
+        and not saas_writes
+        and write_tools
+        and all(t.requires_approval for t in write_tools)
     )
     if all_approved:
         reasons.append("Every change-making tool requires human approval")

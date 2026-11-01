@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from agent_identity.analysis.redaction import hostnames_in, inspect_env
+from agent_identity.analysis.redaction import endpoint_origin, hostnames_in, inspect_env
 from agent_identity.aws.base import CoverageLog, attempt, quiet
 from agent_identity.aws.compute import apply_env
 from agent_identity.aws.network import RegionNetwork
@@ -52,7 +52,9 @@ def collect_runtimes(
         mode = config.get("networkMode")
         vpc = config.get("networkModeConfig") or {}
         if mode == "VPC":
-            network = net.profile(vpc.get("subnets", []), vpc.get("securityGroups", []))
+            network = net.profile(
+                vpc.get("subnets", []), vpc.get("securityGroups", []), public_ipv4=False
+            )
         elif mode == "PUBLIC":
             network = NetworkProfile(
                 in_vpc=False, internet_egress=True, egress_detail="Runtime uses public network mode"
@@ -200,7 +202,7 @@ def link_gateways(
                 ),
                 {},
             )
-            _apply_target(config, target, users, by_arn)
+            _apply_target(config, target, users, by_arn, detail.get("roleArn"))
     if unlinked:
         coverage.gap(
             "AgentCore gateway links",
@@ -211,7 +213,11 @@ def link_gateways(
 
 
 def _apply_target(
-    config: dict, target: dict, users: list[Agent], by_arn: dict[str, Secret]
+    config: dict,
+    target: dict,
+    users: list[Agent],
+    by_arn: dict[str, Secret],
+    gateway_role: str | None = None,
 ) -> None:
     mcp = (config.get("targetConfiguration") or {}).get("mcp") or {}
     endpoint = (mcp.get("mcpServer") or {}).get("endpoint", "")
@@ -242,7 +248,9 @@ def _apply_target(
             Tool(
                 name=target.get("name", target["targetId"]),
                 type="gateway target",
-                target=endpoint or lambda_arn or "gateway target",
+                target=endpoint_origin(endpoint) if endpoint else lambda_arn or "gateway target",
+                # The gateway's role fetches provider credentials and calls the target.
+                role_arn=gateway_role,
                 external=external,
             )
         )

@@ -94,7 +94,11 @@ def apply_macie(
 def apply_dns_logs(
     session: Any, region: str, agents: list[Agent], now: datetime, coverage: CoverageLog
 ) -> None:
-    """Mark configured domains as observed if they're in existing Resolver query logs."""
+    """Mark configured domains as observed if the agent's VPC queried them in Resolver logs.
+
+    The logs give the source address of each query, but not which workload it belongs to, so the
+    VPC is the closest this can get. An agent outside a VPC has no queries in these logs at all.
+    """
     api = client(session, "route53resolver", region)
     configs, ok = attempt(
         coverage,
@@ -125,11 +129,15 @@ def apply_dns_logs(
     logs = client(session, "logs", region)
     start = int((now - timedelta(days=7)).timestamp() * 1000)
     for agent in agents:
+        vpc = agent.network.vpc_id
+        if vpc is None:
+            continue
         for ref in agent.domains:
+            pattern = f'{{ $.query_name = "{ref.hostname}." && $.vpc_id = "{vpc}" }}'
             for group in log_groups:
                 found = quiet(
-                    lambda g=group, h=ref.hostname: logs.filter_log_events(
-                        logGroupName=g, startTime=start, limit=1, filterPattern=f'"{h}"'
+                    lambda g=group, p=pattern: logs.filter_log_events(
+                        logGroupName=g, startTime=start, limit=1, filterPattern=p
                     ).get("events", []),
                     [],
                 )

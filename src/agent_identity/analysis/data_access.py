@@ -10,6 +10,7 @@ from agent_identity.models import (
     Agent,
     DataGrant,
     DataStore,
+    GrantRoute,
     Identity,
     Policy,
     Secret,
@@ -73,10 +74,25 @@ _SERVICE_NAMESPACE = {
 }
 
 
-def _resources_for(store: DataStore) -> list[str]:
-    if store.type == "S3":
-        return [f"{store.arn}/*", store.arn]
-    return [store.arn]
+_S3_BUCKET_ACTIONS = {"s3:DeleteBucket", "s3:PutBucketPolicy"}
+_USE_RANK = {"used": 0, "unknown": 1, "unused": 2}
+
+
+def _whole_store(store: DataStore, action: str) -> str:
+    """The resource an action applies to when it covers the whole store."""
+    if store.type == "S3" and action not in _S3_BUCKET_ACTIONS:
+        return f"{store.arn}/*"
+    if action == "rds-db:connect" and store.db_resource_id:
+        _, _, _, region, account, *_ = store.arn.split(":")
+        return f"arn:aws:rds-db:{region}:{account}:dbuser:{store.db_resource_id}/*"
+    return store.arn
+
+
+def resources_to_check(identity: Identity, store: DataStore, action: str) -> list[str]:
+    """The whole store, then any narrower grants on it, such as one S3 prefix or one DB user."""
+    whole = _whole_store(store, action)
+    narrower = permissions.narrower_resources(identity, action, whole, store.resource_policy)
+    return [whole, *narrower]
 
 
 def _check(
@@ -102,22 +118,35 @@ def _check(
     return allowed, local.conditional and allowed, True
 
 
-def _levels(
-    snapshot: Snapshot, identity: Identity, store: DataStore
-) -> tuple[list[AccessLevel], bool, bool]:
-    levels = []
-    conditional = False
-    verified = False
+@dataclass
+class _Reach:
+    levels: list[AccessLevel]
+    conditional: bool = False
+    verified: bool = False
+    limited_to: list[str] | None = None
+
+
+def _levels(snapshot: Snapshot, identity: Identity, store: DataStore) -> _Reach:
+    reach = _Reach(levels=[])
+    whole_store = False
+    limited: set[str] = set()
     for level, actions in STORE_ACTIONS.get(store.type, {}).items():
         for action in actions:
-            for resource in _resources_for(store):
+            whole, *narrower = resources_to_check(identity, store, action)
+            for resource in [whole, *narrower]:
                 ok, cond, ver = _check(snapshot, identity, action, resource, store.resource_policy)
-                verified = verified or ver
-                if ok:
-                    if level not in levels:
-                        levels.append(level)
-                    conditional = conditional or cond
-    return levels, conditional, verified
+                reach.verified = reach.verified or ver
+                if not ok:
+                    continue
+                if level not in reach.levels:
+                    reach.levels.append(level)
+                reach.conditional = reach.conditional or cond
+                if resource == whole:
+                    whole_store = True
+                    break
+                limited.add(resource)
+    reach.limited_to = [] if whole_store else sorted(limited)
+    return reach
 
 
 def _kms_blocked(snapshot: Snapshot, identity: Identity, store: DataStore) -> bool:
@@ -172,48 +201,67 @@ def _use(snapshot: Snapshot, identity: Identity, store: DataStore) -> tuple[str,
     return "unknown", f"IAM shows {namespace} use on {last:%d %b %Y}, but not on which resource"
 
 
+def _summarise(grant: DataGrant) -> None:
+    """Describe a grant from its routes, without implying one route allows everything."""
+    routes = grant.routes
+    main = next((r for r in routes if not r.indirect), routes[0])
+    direct = {level for r in routes if not r.indirect for level in r.levels}
+    every = {level for r in routes for level in r.levels}
+    best_use = min(routes, key=lambda r: _USE_RANK.get(r.use, 1))
+    grant.identity_arn, grant.path, grant.indirect = main.identity_arn, main.path, main.indirect
+    grant.levels = [level for level in AccessLevel if level in every]
+    grant.indirect_levels = [level for level in grant.levels if level not in direct]
+    grant.conditional = all(r.conditional for r in routes)
+    grant.verified = any(r.verified for r in routes)
+    grant.blocked_by_kms = all(r.blocked_by_kms for r in routes)
+    grant.limited_to = (
+        sorted({p for r in routes for p in r.limited_to})
+        if all(r.limited_to for r in routes)
+        else []
+    )
+    grant.use, grant.use_detail = best_use.use, best_use.use_detail
+
+
 def build_data_grants(snapshot: Snapshot) -> list[DataGrant]:
     grants: dict[tuple[str, str], DataGrant] = {}
     stores = {s.arn: s for s in snapshot.stores}
 
-    def merge(grant: DataGrant) -> None:
-        key = (grant.agent_id, grant.store_arn)
-        current = grants.get(key)
-        if current is None:
-            grants[key] = grant
-            return
-        direct_wins = current.indirect and not grant.indirect
-        for level in grant.levels:
-            if level not in current.levels:
-                current.levels.append(level)
-        if direct_wins:
-            current.indirect, current.path = False, grant.path
-            current.identity_arn = grant.identity_arn
-            current.use, current.use_detail = grant.use, grant.use_detail
-            current.conditional, current.blocked_by_kms = grant.conditional, grant.blocked_by_kms
+    def merge(agent_id: str, store_arn: str, route: GrantRoute) -> None:
+        grant = grants.setdefault(
+            (agent_id, store_arn),
+            DataGrant(
+                agent_id=agent_id,
+                identity_arn=route.identity_arn,
+                store_arn=store_arn,
+                levels=route.levels,
+            ),
+        )
+        grant.routes.append(route)
+        _summarise(grant)
 
     for agent in snapshot.agents:
         routes = identity_routes(agent, snapshot)
         for route in routes:
             for store in snapshot.stores:
-                levels, conditional, verified = _levels(snapshot, route.identity, store)
-                if not levels:
+                reach = _levels(snapshot, route.identity, store)
+                if not reach.levels:
                     continue
                 use, detail = _use(snapshot, route.identity, store)
                 merge(
-                    DataGrant(
-                        agent_id=agent.id,
+                    agent.id,
+                    store.arn,
+                    GrantRoute(
                         identity_arn=route.identity.arn,
-                        store_arn=store.arn,
-                        levels=levels,
-                        conditional=conditional,
-                        verified=verified,
+                        levels=reach.levels,
+                        conditional=reach.conditional,
+                        verified=reach.verified,
                         blocked_by_kms=_kms_blocked(snapshot, route.identity, store),
+                        limited_to=reach.limited_to or [],
                         indirect=route.indirect,
                         path=[*route.path, store.name],
                         use=use,
                         use_detail=detail,
-                    )
+                    ),
                 )
         # A knowledge base attached to the agent exposes its content and its source buckets,
         # because the service reads them on the agent's behalf with the KB's own role.
@@ -222,43 +270,43 @@ def build_data_grants(snapshot: Snapshot) -> list[DataGrant]:
             if kb is None:
                 continue
             merge(
-                DataGrant(
-                    agent_id=agent.id,
+                agent.id,
+                kb.arn,
+                GrantRoute(
                     identity_arn=agent.identity_arn or "",
-                    store_arn=kb.arn,
                     levels=[AccessLevel.READ],
                     indirect=False,
                     path=[agent.name, "attached knowledge base", kb.name],
                     use_detail="Attached in the agent's configuration",
-                )
+                ),
             )
             for source_arn in kb.source_store_arns:
                 source = stores.get(source_arn)
                 if source is None:
                     continue
                 merge(
-                    DataGrant(
-                        agent_id=agent.id,
+                    agent.id,
+                    source.arn,
+                    GrantRoute(
                         identity_arn=agent.identity_arn or "",
-                        store_arn=source.arn,
                         levels=[AccessLevel.READ],
                         indirect=True,
                         path=[agent.name, kb.name, f"indexed from {source.name}"],
                         use_detail="Content reaches the agent through the knowledge base",
-                    )
+                    ),
                 )
         for memory_arn in agent.memory_arns:
             memory = stores.get(memory_arn)
             if memory is not None:
                 merge(
-                    DataGrant(
-                        agent_id=agent.id,
+                    agent.id,
+                    memory.arn,
+                    GrantRoute(
                         identity_arn=agent.identity_arn or "",
-                        store_arn=memory.arn,
                         levels=[AccessLevel.READ, AccessLevel.WRITE],
                         path=[agent.name, "attached memory", memory.name],
                         use_detail="Attached in the agent's configuration",
-                    )
+                    ),
                 )
     return list(grants.values())
 
@@ -266,8 +314,10 @@ def build_data_grants(snapshot: Snapshot) -> list[DataGrant]:
 def build_secret_grants(snapshot: Snapshot) -> list[SecretGrant]:
     grants: dict[tuple[str, str], SecretGrant] = {}
     secrets: dict[str, Secret] = {s.arn: s for s in snapshot.secrets}
+    identities = {i.arn: i for i in snapshot.identities}
     for agent in snapshot.agents:
-        for route in identity_routes(agent, snapshot):
+        routes = identity_routes(agent, snapshot)
+        for route in routes:
             for secret in snapshot.secrets:
                 action = SECRET_ACTIONS.get(secret.kind)
                 if action is None:
@@ -290,11 +340,41 @@ def build_secret_grants(snapshot: Snapshot) -> list[SecretGrant]:
                     )
         for arn in agent.secret_arns:
             if arn in secrets and (agent.id, arn) not in grants:
-                grants[(agent.id, arn)] = SecretGrant(
-                    agent_id=agent.id,
-                    identity_arn=agent.identity_arn or "",
-                    secret_arn=arn,
-                    referenced=True,
-                    path=[agent.name, "referenced in config", secrets[arn].name],
+                grants[(agent.id, arn)] = _referenced_grant(
+                    snapshot, agent, secrets[arn], identities, bool(routes)
                 )
     return list(grants.values())
+
+
+def _referenced_grant(
+    snapshot: Snapshot,
+    agent: Agent,
+    secret: Secret,
+    identities: dict[str, Identity],
+    identity_known: bool,
+) -> SecretGrant:
+    """Config naming a secret isn't permission to read it, unless a fetching role can."""
+    action = SECRET_ACTIONS.get(secret.kind)
+    for arn in agent.secret_fetch_role_arns:
+        role = identities.get(arn)
+        if role is None or action is None:
+            continue
+        allowed, conditional, _ = _check(snapshot, role, action, secret.arn, secret.resource_policy)
+        if allowed:
+            return SecretGrant(
+                agent_id=agent.id,
+                identity_arn=role.arn,
+                secret_arn=secret.arn,
+                conditional=conditional,
+                indirect=True,
+                referenced=True,
+                path=[agent.name, f"fetched at start by {role.name}", secret.name],
+            )
+    return SecretGrant(
+        agent_id=agent.id,
+        identity_arn=agent.identity_arn or "",
+        secret_arn=secret.arn,
+        referenced=True,
+        authorized=False if identity_known else None,
+        path=[agent.name, "referenced in config", secret.name],
+    )

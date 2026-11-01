@@ -54,7 +54,7 @@
 
 <h2>Data this agent can reach</h2>
 {% if grants %}<div class="table-scroll"><table><thead><tr><th>Store</th><th>Sensitivity</th><th>Strongest access</th><th>Used?</th><th>Route</th></tr></thead><tbody>
-{% for g in grants %}{% set s = estate.stores[g.store_arn] %}<tr><td><a href="/data/store?arn={{ s.arn|q }}">{{ s.name }}</a><div class="sub">{{ s.type }}</div></td><td>{{ s.sensitivity.value|capitalize }}<div class="sub">{{ s.sensitivity_source }}</div></td><td>{{ g.levels|map(attribute='value')|join(', ')|capitalize }}{% if g.conditional %}<div class="sub">Depends on a policy condition</div>{% endif %}{% if g.blocked_by_kms %}<div class="sub">IAM doesn't allow kms:Decrypt, but the key policy might</div>{% endif %}</td><td>{{ g.use|capitalize }}<div class="sub">{{ g.use_detail }}</div></td><td>{{ g.path|join(', then ') }}</td></tr>{% endfor %}
+{% for g in grants %}{% set s = estate.stores[g.store_arn] %}<tr><td><a href="/data/store?arn={{ s.arn|q }}">{{ s.name }}</a><div class="sub">{{ s.type }}</div></td><td>{{ s.sensitivity.value|capitalize }}<div class="sub">{{ s.sensitivity_source }}</div></td><td>{{ g.levels|map(attribute='value')|join(', ')|capitalize }}{% if g.conditional %}<div class="sub">Depends on a policy condition</div>{% endif %}{% if g.blocked_by_kms %}<div class="sub">IAM doesn't allow kms:Decrypt, but the key policy might</div>{% endif %}</td><td>{{ g.use|capitalize }}<div class="sub">{{ g.use_detail }}</div></td><td>{{ m.routes(g) }}</td></tr>{% endfor %}
 </tbody></table></div>{% else %}<p>No data access found.</p>{% endif %}
 
 <div class="split-even">
@@ -69,7 +69,7 @@
   <h2>Secrets</h2>
   {% if secret_grants or a.plaintext_secrets %}<ul class="plain">
   {% for p in a.plaintext_secrets %}<li>{{ m.sev('critical') }} {{ p.detector }} in plain text: <code>{{ p.variable }}</code></li>{% endfor %}
-  {% for g in secret_grants %}<li>{{ estate.secrets[g.secret_arn].name }} <span class="muted">{{ 'referenced in config' if g.referenced else "can read, but doesn't reference it" }}</span></li>{% endfor %}
+  {% for g in secret_grants %}<li>{{ estate.secrets[g.secret_arn].name }} <span class="muted">{% if g.authorized is false %}named in config, but no permission to read it was found{% elif g.authorized is none %}named in config, permission not determined{% elif g.referenced %}referenced in config{% else %}can read, but doesn't reference it{% endif %}</span></li>{% endfor %}
   </ul>{% else %}<p>None found.</p>{% endif %}
 </section>
 <section>
@@ -77,7 +77,7 @@
   <ul class="plain">
   <li>Reachable from the internet: {% if a.network.inbound is none %}Not assessed{% else %}{{ 'Yes' if row.internet else 'No' }}{% endif %}</li>
   <li>Outbound internet: {{ a.network.internet_egress|tri }}{% if a.network.egress_detail %} <span class="muted">{{ a.network.egress_detail }}</span>{% endif %}</li>
-  {% for d in a.domains %}<li><code>{{ d.hostname }}</code> <span class="muted">{{ 'contacted' if d.observed else 'in config' }}, from {{ d.source }}</span></li>{% endfor %}
+  {% for d in a.domains %}<li><code>{{ d.hostname }}</code> <span class="muted">{{ "queried from its VPC" if d.observed else 'in config' }}, from {{ d.source }}</span></li>{% endfor %}
   </ul>
   <h2>Runtime</h2>
   <ul class="plain">

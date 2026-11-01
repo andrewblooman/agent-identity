@@ -54,6 +54,7 @@
         "iam:ListAccessKeys",
         "iam:SimulatePrincipalPolicy",
         "inspector2:BatchGetAccountStatus",
+        "inspector2:ListCoverage",
         "inspector2:ListFindings",
         "lambda:GetPolicy",
         "lambda:ListEventSourceMappings",

@@ -522,6 +522,8 @@ def overscoped_secrets(ctx: Context):
 def unrotated(ctx: Context):
     hits = []
     for grant in ctx.secret_grants:
+        if not grant.authorized:
+            continue
         secret = ctx.secrets[grant.secret_arn]
         if secret.rotation_enabled is False:
             hits.append(Hit(f"{secret.name} has rotation turned off", secret.arn))
@@ -544,12 +546,15 @@ def unrotated(ctx: Context):
 def shared_secret(ctx: Context):
     hits = []
     for grant in ctx.secret_grants:
-        if not grant.referenced:
+        if not grant.referenced or not grant.authorized:
             continue
         others = [
             ctx.agents_by_id[g.agent_id].name
             for g in ctx.all_secret_grants
-            if g.secret_arn == grant.secret_arn and g.agent_id != ctx.agent.id and g.referenced
+            if g.secret_arn == grant.secret_arn
+            and g.agent_id != ctx.agent.id
+            and g.referenced
+            and g.authorized
         ]
         if others:
             hits.append(
@@ -573,6 +578,8 @@ def shared_secret(ctx: Context):
 def dormant_secret(ctx: Context):
     hits = []
     for grant in ctx.secret_grants:
+        if not grant.authorized:
+            continue
         secret = ctx.secrets[grant.secret_arn]
         if secret.last_accessed and _age_days(ctx, secret.last_accessed) > 90:
             days = _age_days(ctx, secret.last_accessed)
@@ -649,7 +656,7 @@ def open_egress(ctx: Context):
     aws=(PERIMETER,),
 )
 def open_sg(ctx: Context):
-    if ctx.agent.network.in_vpc is None:
+    if ctx.agent.network.in_vpc is None or ctx.agent.network.open_security_groups is None:
         return None
     return [
         Hit(f"{sg} allows inbound from 0.0.0.0/0", sg)

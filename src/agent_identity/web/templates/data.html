@@ -21,7 +21,7 @@
 </thead>
 <tbody>
 {% for row in rows %}<tr><th scope="row"><a href="/agents/{{ row.agent.id|q }}">{{ row.agent.name }}</a></th>
-{% for s in stores %}{% set g = cell.get((row.agent.id, s.arn)) %}<td>{% if g %}{% set top = strongest(g) %}<a class="cell lvl-{{ top.value }} {{ 'cell-indirect' if g.indirect }}" href="/data/store?arn={{ s.arn|q }}" title="{{ row.agent.name }} on {{ s.name }}: {{ g.levels|map(attribute='value')|join(', ') }}. {{ g.path|join(', then ') }}">{{ top.value|capitalize }}</a>{% endif %}</td>{% endfor %}
+{% for s in stores %}{% set g = cell.get((row.agent.id, s.arn)) %}<td>{% if g %}{% set top = strongest(g) %}<a class="cell lvl-{{ top.value }} {{ 'cell-indirect' if g.indirect }}" href="/data/store?arn={{ s.arn|q }}" title="{{ row.agent.name }} on {{ s.name }}: {{ g.levels|map(attribute='value')|join(', ') }}. {{ g.path|join(', then ') }}{% if g.indirect_levels %}. Only through another route: {{ g.indirect_levels|map(attribute='value')|join(', ') }}{% endif %}">{{ top.value|capitalize }}</a>{% endif %}</td>{% endfor %}
 </tr>{% else %}<tr><td colspan="{{ stores|length + 1 }}">No agent can reach these stores.</td></tr>{% endfor %}
 </tbody></table></div>
 

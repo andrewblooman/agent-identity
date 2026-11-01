@@ -127,7 +127,13 @@ def collect_lambda(
         vpc = fn.get("VpcConfig") or {}
         subnets, groups = vpc.get("SubnetIds") or [], vpc.get("SecurityGroupIds") or []
         if subnets:
-            network = net.profile(subnets, groups)
+            # Lambda's network interfaces never get a public IPv4 address, even in a public subnet.
+            network = net.profile(
+                subnets,
+                groups,
+                public_ipv4=False,
+                ipv6=bool(vpc.get("Ipv6AllowedForDualStack")),
+            )
         else:
             network = NetworkProfile(
                 inbound=[],
@@ -300,11 +306,13 @@ def _ecs_agent(
     containers = task.get("containerDefinitions", [])
     vpc = (service.get("networkConfiguration") or {}).get("awsvpcConfiguration") or {}
     subnets, groups = vpc.get("subnets", []), vpc.get("securityGroups", [])
-    network = net.profile(subnets, groups) if subnets else NetworkProfile(inbound=None)
+    public_ip = vpc.get("assignPublicIp") == "ENABLED"
+    network = (
+        net.profile(subnets, groups, public_ipv4=public_ip)
+        if subnets
+        else NetworkProfile(inbound=None)
+    )
     network.inbound = _ecs_load_balancers(session, region, service)
-    if vpc.get("assignPublicIp") == "ENABLED":
-        network.internet_egress = True
-        network.egress_detail = "Tasks have a public IP"
     first_image = containers[0].get("image") if containers else None
     runs_as_root = (
         any(c.get("user") in (None, "root", "0") for c in containers) if containers else None
@@ -320,6 +328,7 @@ def _ecs_agent(
         platform=Platform.ECS,
         resource_arn=service["serviceArn"],
         identity_arn=task.get("taskRoleArn"),
+        secret_fetch_role_arns=[task["executionRoleArn"]] if task.get("executionRoleArn") else [],
         owner=_tag(tags, _OWNER_TAGS),
         environment=_tag(tags, _ENV_TAGS),
         network=network,
@@ -435,8 +444,13 @@ def collect_ec2(
         profile_arn = (instance.get("IamInstanceProfile") or {}).get("Arn")
         subnets = [instance["SubnetId"]] if instance.get("SubnetId") else []
         groups = [g["GroupId"] for g in instance.get("SecurityGroups", [])]
-        network = net.profile(subnets, groups) if subnets else NetworkProfile()
-        if instance.get("PublicIpAddress"):
+        public_ip = bool(instance.get("PublicIpAddress"))
+        network = (
+            net.profile(subnets, groups, public_ipv4=public_ip) if subnets else NetworkProfile()
+        )
+        if public_ip and network.open_security_groups is None:
+            network.inbound = None
+        if public_ip:
             network.internet_egress = (
                 True if network.internet_egress is None else network.internet_egress
             )
