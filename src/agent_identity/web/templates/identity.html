@@ -1,0 +1,18 @@
+{% extends "base.html" %}{% block title %}Identity{% endblock %}
+{% block main %}
+<h1>Identities agents run as</h1>
+<p class="lede">The IAM roles and users behind each agent. An agent can do whatever its identity allows, whatever its instructions say.</p>
+<h2>IAM roles</h2>
+<div class="table-scroll"><table><thead><tr><th>Role</th><th>Used by</th><th>Administrator</th><th class="num">Ways to raise privileges</th><th class="num">Data stores</th><th class="num">Secrets</th><th>Unused services</th><th>Boundary</th><th>Last used</th></tr></thead><tbody>
+{% for s in roles %}<tr><td><a href="/identity/detail?arn={{ s.identity.arn|q }}">{{ s.identity.name }}</a>{% if s.identity.trust_is_broad %}<div class="sub">{{ m.sev('high') }} Broad trust policy</div>{% endif %}</td><td>{% for a in s.agents %}<a href="/agents/{{ a.id|q }}">{{ a.name }}</a>{{ ', ' if not loop.last }}{% else %}<span class="muted">None directly</span>{% endfor %}</td><td>{% if s.admin %}{{ m.sev('critical') }} Yes{% else %}No{% endif %}</td><td class="num">{{ s.privesc|length }}</td><td class="num">{{ s.store_count }}</td><td class="num">{{ s.secret_count }}</td><td>{% if s.unused is none %}<span class="muted">Not assessed</span>{% elif s.unused %}{{ s.unused|length }} of {{ s.unused|length + s.used_count }}{% else %}None{% endif %}</td><td>{{ s.identity.boundary.name if s.identity.boundary else 'None' }}</td><td>{{ s.identity.last_used|ago }}</td></tr>{% endfor %}
+</tbody></table></div>
+
+<h2>Access keys</h2>
+<p class="muted">Long-lived keys don't expire, so a stolen key keeps working until someone notices. Agents should use roles instead.</p>
+{% if keys %}<div class="table-scroll"><table><thead><tr><th>Key</th><th>User</th><th>Used by</th><th>Status</th><th>Created</th><th>Last used</th><th>Last service</th><th>Signs of human use</th></tr></thead><tbody>
+{% for k in keys %}<tr><td><code>{{ k.key.key_id }}</code></td><td><a href="/identity/detail?arn={{ k.identity.arn|q }}">{{ k.identity.name }}</a></td><td>{% for a in k.agents %}<a href="/agents/{{ a.id|q }}">{{ a.name }}</a>{{ ', ' if not loop.last }}{% endfor %}</td><td>{{ k.key.status }}</td><td>{{ k.key.created|ago }}</td><td>{{ k.key.last_used|ago('Never') }}</td><td>{{ k.key.last_service or 'None' }}</td><td>{{ k.key.human_use_signal or 'None found' }}</td></tr>{% endfor %}
+</tbody></table></div>{% else %}<p>No agent uses a long-lived access key.</p>{% endif %}
+
+<h2>Credential providers</h2>
+{% if providers %}<table class="compact"><thead><tr><th>Provider</th><th>Type</th><th>Vendor</th><th>Created</th></tr></thead><tbody>{% for p in providers %}<tr><td>{{ p.name }}</td><td>{{ p.kind }}</td><td>{{ p.vendor or 'Unknown' }}</td><td>{{ p.created|ago }}</td></tr>{% endfor %}</tbody></table>{% else %}<p>No AgentCore credential providers found.</p>{% endif %}
+{% endblock %}

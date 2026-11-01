@@ -1,0 +1,42 @@
+{% extends "base.html" %}{% block title %}Overview{% endblock %}
+{% block main %}
+<div class="dash-head">
+  <h1>AI agent posture</h1>
+  <p>{{ rows|length }} agent{{ 's' if rows|length != 1 }} found, {{ estate.result.coverage_pct }}% of checks could run. {% if gap_count %}<a href="/scans">{{ gap_count }} source{{ 's' if gap_count != 1 }} not read</a>{% endif %}</p>
+</div>
+{% if not rows %}
+<div class="tile"><h2>No agents found</h2><p class="muted">That only covers the sources that could be read. <a href="/scans">Check what this scan could see</a> before treating this as a clean result.</p></div>
+{% else %}
+<div class="dash-top">
+  <section class="tile gauge-tile">
+    <h2>Posture score</h2>
+    {{ m.gauge(posture, 240, 'Posture score') }}
+    <p class="gauge-note">out of 100{% if change %}, {{ 'up' if change > 0 else 'down' }} {{ change|abs }} since the last scan{% endif %}. <a href="/frameworks#score">How it works</a></p>
+  </section>
+  <section class="tile">
+    <h2>Findings</h2>
+    <div class="ring-row">{{ m.ring(severity_ring, 'findings') }}{{ m.ring_key(severity_ring) }}</div>
+  </section>
+  <section class="tile">
+    <h2>Agents by risk</h2>
+    <div class="ring-row">{{ m.ring(band_ring, 'agents') }}{{ m.ring_key(band_ring) }}</div>
+  </section>
+</div>
+<div class="dash-tiles">
+  {% for t in tiles %}<a class="stat-tile stat-{{ t.tone if t.count else 'good' }}" href="{{ t.href }}"><span class="stat-num">{{ t.count }}</span><span class="stat-label">{{ t.label }}</span></a>{% endfor %}
+</div>
+<div class="dash-bottom">
+  <section class="tile">
+    <h2>Score by area</h2>
+    <div class="areas">{% for a in areas %}<a href="{{ a.href }}">{{ m.gauge(a, 120, a.label) }}{{ a.label }}</a>{% endfor %}</div>
+  </section>
+  <section class="tile">
+    <h2>Riskiest agents</h2>
+    <ul class="worst">
+    {% for w in worst %}<li><a href="/agents/{{ w.row.agent.id|q }}"><span class="worst-name">{{ w.row.agent.name }}</span><svg class="score-bar" viewBox="0 0 100 8" preserveAspectRatio="none" aria-hidden="true"><rect class="track" width="100" height="8" rx="4"/><rect class="fill-{{ w.tone }}" width="{{ [w.row.result.score, 3]|max }}" height="8" rx="4"/></svg><span class="worst-num">{{ w.row.result.score }}</span></a></li>{% endfor %}
+    </ul>
+    <p class="dash-foot"><a href="/agents">See all agents</a></p>
+  </section>
+</div>
+{% endif %}
+{% endblock %}

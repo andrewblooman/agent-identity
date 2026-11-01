@@ -1,0 +1,96 @@
+{% extends "base.html" %}{% set a = row.agent %}{% set r = row.result %}{% block title %}{{ a.name }}{% endblock %}
+{% block main %}
+<p class="crumb"><a href="/agents">Agents</a></p>
+<div class="agent-head">
+  {{ m.glyph(r.trifecta, 72) }}
+  <div>
+    <h1>{{ a.name }}</h1>
+    <p class="lede">{{ a.description }}</p>
+    <p class="arn">{{ a.resource_arn }}</p>
+  </div>
+</div>
+<dl class="facts">
+  <div><dt>Score</dt><dd>{{ m.score(row) }}{% if r.cap_reason %}<div class="sub">{{ r.cap_reason }} (was {{ r.uncapped_score }})</div>{% endif %}</dd></div>
+  <div><dt>Checks that could run</dt><dd>{{ r.coverage_pct }}%</dd></div>
+  <div><dt>Type</dt><dd>{{ a.kind.value|capitalize }}</dd></div>
+  <div><dt>Evidence</dt><dd>{{ a.confidence.value|capitalize }}</dd></div>
+  <div><dt>Estimated autonomy</dt><dd>{% if r.autonomy_scope %}Scope {{ r.autonomy_scope }} of 4{% else %}Not assessed{% endif %}</dd></div>
+  <div><dt>Owner</dt><dd>{{ a.owner or 'None' }}</dd></div>
+  <div><dt>Environment</dt><dd>{{ a.environment or 'Unknown' }}</dd></div>
+  <div><dt>Last model call</dt><dd>{{ a.last_model_call|ago('No record') }}</dd></div>
+</dl>
+
+<h2>How an attack could play out</h2>
+{{ m.graph(graph) }}
+
+<div class="split-even">
+<section>
+  <h2>Lethal trifecta</h2>
+  <ul class="legs">
+  {% for title, leg in [('Sensitive data', r.trifecta.sensitive_data), ('Untrusted input', r.trifecta.untrusted_input), ('A way out', r.trifecta.outbound_path)] %}
+  <li><strong>{{ title }}: {{ leg.state|tri('present', 'not found') }}</strong><ul>{% for reason in leg.reasons[:4] %}<li>{{ reason }}</li>{% endfor %}{% if leg.reasons|length > 4 %}<li class="muted">and {{ leg.reasons|length - 4 }} more</li>{% endif %}</ul></li>
+  {% endfor %}
+  </ul>
+</section>
+<section>
+  <h2>Why this is listed as an agent</h2>
+  <ul class="plain">{% for e in a.evidence %}<li><strong>{{ e.source }}</strong>: {{ e.detail }}</li>{% endfor %}</ul>
+  <h2>Autonomy estimate</h2>
+  <ul class="plain">{% for reason in r.autonomy_reasons %}<li>{{ reason }}</li>{% endfor %}</ul>
+  <p class="muted">Estimated from configuration against the AWS scoping matrix. Real oversight may differ.</p>
+</section>
+</div>
+
+<h2>Score by area</h2>
+<table class="compact"><thead><tr><th>Area</th><th class="num">Score</th><th class="num">Checks that could run</th><th class="num">Findings</th></tr></thead><tbody>
+{% for d in domains_scored %}<tr><td>{{ d.domain.value|capitalize }}</td><td class="num">{{ d.score if d.score is not none else 'Not assessed' }}</td><td class="num">{{ d.assessed }} of {{ d.total }}</td><td class="num">{{ by_domain[d.domain]|length }}</td></tr>{% endfor %}
+</tbody></table>
+
+<h2>Findings</h2>
+{% if row.findings %}<div class="ring-row">{{ m.ring(severity_ring, "findings", 120) }}{{ m.ring_key(severity_ring) }}</div>
+<div class="table-scroll"><table><thead><tr><th>Severity</th><th>Finding</th><th>Evidence</th><th>What to do</th></tr></thead><tbody>
+{% for f in row.findings %}<tr><td>{{ m.sev(f.severity) }}</td><td>{{ f.title }}<div class="sub">{{ f.rule_id }}</div></td><td>{{ f.evidence }}</td><td>{{ f.remediation }}</td></tr>{% endfor %}
+</tbody></table></div>{% else %}<p>No findings from the checks that could run.</p>{% endif %}
+
+<h2>Data this agent can reach</h2>
+{% if grants %}<div class="table-scroll"><table><thead><tr><th>Store</th><th>Sensitivity</th><th>Strongest access</th><th>Used?</th><th>Route</th></tr></thead><tbody>
+{% for g in grants %}{% set s = estate.stores[g.store_arn] %}<tr><td><a href="/data/store?arn={{ s.arn|q }}">{{ s.name }}</a><div class="sub">{{ s.type }}</div></td><td>{{ s.sensitivity.value|capitalize }}<div class="sub">{{ s.sensitivity_source }}</div></td><td>{{ g.levels|map(attribute='value')|join(', ')|capitalize }}{% if g.conditional %}<div class="sub">Depends on a policy condition</div>{% endif %}{% if g.blocked_by_kms %}<div class="sub">IAM doesn't allow kms:Decrypt, but the key policy might</div>{% endif %}</td><td>{{ g.use|capitalize }}<div class="sub">{{ g.use_detail }}</div></td><td>{{ g.path|join(', then ') }}</td></tr>{% endfor %}
+</tbody></table></div>{% else %}<p>No data access found.</p>{% endif %}
+
+<div class="split-even">
+<section>
+  <h2>Identity</h2>
+  {% if identity %}<p><a href="/identity/detail?arn={{ identity.arn|q }}">{{ identity.name }}</a> (IAM {{ identity.kind }})</p>
+  <ul class="plain">
+   <li>Administrator access: {{ 'Yes' if r.admin_equivalent else 'No' }}</li>
+   <li>Ways to raise privileges: {{ r.privesc_paths|length }}</li>
+   <li>Other agents sharing it: {{ r.shared_identity_with|length }}</li>
+  </ul>{% else %}<p class="muted">Not determined.</p>{% endif %}
+  <h2>Secrets</h2>
+  {% if secret_grants or a.plaintext_secrets %}<ul class="plain">
+  {% for p in a.plaintext_secrets %}<li>{{ m.sev('critical') }} {{ p.detector }} in plain text: <code>{{ p.variable }}</code></li>{% endfor %}
+  {% for g in secret_grants %}<li>{{ estate.secrets[g.secret_arn].name }} <span class="muted">{{ 'referenced in config' if g.referenced else "can read, but doesn't reference it" }}</span></li>{% endfor %}
+  </ul>{% else %}<p>None found.</p>{% endif %}
+</section>
+<section>
+  <h2>Network</h2>
+  <ul class="plain">
+  <li>Reachable from the internet: {% if a.network.inbound is none %}Not assessed{% else %}{{ 'Yes' if row.internet else 'No' }}{% endif %}</li>
+  <li>Outbound internet: {{ a.network.internet_egress|tri }}{% if a.network.egress_detail %} <span class="muted">{{ a.network.egress_detail }}</span>{% endif %}</li>
+  {% for d in a.domains %}<li><code>{{ d.hostname }}</code> <span class="muted">{{ 'contacted' if d.observed else 'in config' }}, from {{ d.source }}</span></li>{% endfor %}
+  </ul>
+  <h2>Runtime</h2>
+  <ul class="plain">
+  <li>{{ a.runtime.platform_detail or a.platform.value }}{% if a.runtime.language_runtime %}, {{ a.runtime.language_runtime }}{% endif %}</li>
+  {% if a.runtime.image %}<li><code class="wrap">{{ a.runtime.image }}</code></li>{% endif %}
+  <li>Vulnerabilities: {% if a.runtime.vulns_assessed %}{{ a.runtime.vulnerabilities|length }} from {{ a.runtime.vulns_source }}{% else %}Not assessed{% if a.runtime.vulns_source %} ({{ a.runtime.vulns_source }}){% endif %}{% endif %}</li>
+  {% if a.runtime.frameworks %}<li>Frameworks: {{ a.runtime.frameworks|join(', ') }}</li>{% endif %}
+  </ul>
+  <h2>Tools and SaaS</h2>
+  {% if a.tools or a.saas %}<ul class="plain">
+  {% for t in a.tools %}<li>{{ t.name }} <span class="muted">{{ t.type }}, {{ t.target }}{{ ', needs approval' if t.requires_approval }}</span></li>{% endfor %}
+  {% for s in a.saas %}<li>{{ s.vendor }} <span class="muted">{{ s.credential_type }}{{ ', can write' if s.can_write }}</span></li>{% endfor %}
+  </ul>{% else %}<p>None found.</p>{% endif %}
+</section>
+</div>
+{% endblock %}

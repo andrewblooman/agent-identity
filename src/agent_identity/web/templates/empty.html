@@ -1,0 +1,7 @@
+{% extends "base.html" %}{% block title %}No results yet{% endblock %}
+{% block main %}
+<h1>No scan results for your account yet</h1>
+<p class="lede">Run a scan to find the agents in your AWS account. It only makes read-only calls and changes nothing.</p>
+<form method="post" action="/scans/live"><button class="primary" type="submit">Scan my account</button></form>
+<p><a href="/scans">See scan settings and history</a></p>
+{% endblock %}

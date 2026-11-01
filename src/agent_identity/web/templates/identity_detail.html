@@ -1,0 +1,31 @@
+{% extends "base.html" %}{% set i = summary.identity %}{% block title %}{{ i.name }}{% endblock %}
+{% block main %}
+<p class="crumb"><a href="/identity">Identity</a></p>
+<h1>{{ i.name }}</h1>
+<p class="arn">{{ i.arn }}</p>
+<dl class="facts">
+  <div><dt>Kind</dt><dd>IAM {{ i.kind }}</dd></div>
+  <div><dt>Administrator</dt><dd>{{ 'Yes' if summary.admin else 'No' }}</dd></div>
+  <div><dt>Created</dt><dd>{{ i.created|ago('Unknown') }}</dd></div>
+  <div><dt>Last used</dt><dd>{{ i.last_used|ago }}</dd></div>
+  <div><dt>Boundary</dt><dd>{{ i.boundary.name if i.boundary else 'None' }}</dd></div>
+</dl>
+<div class="split-even">
+<section>
+  <h2>Used by</h2>
+  <ul class="plain">{% for a in summary.agents %}<li><a href="/agents/{{ a.id|q }}">{{ a.name }}</a> <span class="muted">{{ a.environment or '' }}</span></li>{% else %}<li class="muted">No agent uses this directly.</li>{% endfor %}</ul>
+  {% if i.kind == 'role' %}<h2>Who can assume it</h2><ul class="plain">{% for p in i.trusted_principals %}<li><code class="wrap">{{ p }}</code></li>{% else %}<li class="muted">No trust data.</li>{% endfor %}</ul>{% endif %}
+  {% if summary.assumes %}<h2>Roles it can assume</h2><ul class="plain">{% for t in summary.assumes %}<li><a href="/identity/detail?arn={{ t.arn|q }}">{{ t.name }}</a></li>{% endfor %}</ul>{% endif %}
+  {% if summary.privesc %}<h2>Ways to raise privileges</h2><ul class="plain">{% for p in summary.privesc %}<li>{{ p }}</li>{% endfor %}</ul>{% endif %}
+</section>
+<section>
+  <h2>Service use</h2>
+  {% if i.service_last_used is none %}<p class="muted">Not assessed.</p>{% else %}<table class="compact"><thead><tr><th>Service</th><th>Last used</th></tr></thead><tbody>{% for service, last in i.service_last_used|dictsort %}<tr><td>{{ service }}</td><td>{{ last|ago('Not in the last 400 days') }}</td></tr>{% endfor %}</tbody></table>{% endif %}
+</section>
+</div>
+<h2>Policies</h2>
+{% for p in i.policies %}<details class="policy"><summary>{{ p.name }}{% if p.managed_by_aws %} <span class="muted">AWS managed</span>{% endif %}</summary>
+<table class="compact"><thead><tr><th>Effect</th><th>Actions</th><th>Resources</th><th>Conditional</th></tr></thead><tbody>{% for s in p.statements %}<tr><td>{{ s.effect }}</td><td><code class="wrap">{{ (s.actions or s.not_actions)|join(', ') }}</code>{% if s.not_actions %}<div class="sub">All except these</div>{% endif %}</td><td><code class="wrap">{{ (s.resources or s.not_resources)|join(', ') }}</code></td><td>{{ 'Yes' if s.conditional else 'No' }}</td></tr>{% endfor %}</tbody></table></details>{% else %}<p class="muted">No policies.</p>{% endfor %}
+<h2>Data reachable with this identity</h2>
+{% if grants %}<table class="compact"><thead><tr><th>Store</th><th>Agent</th><th>Strongest access</th></tr></thead><tbody>{% for g in grants %}<tr><td><a href="/data/store?arn={{ g.store_arn|q }}">{{ estate.stores[g.store_arn].name }}</a></td><td>{{ estate.agents[g.agent_id].name }}</td><td>{{ m.levels(g, strongest) }}</td></tr>{% endfor %}</tbody></table>{% else %}<p>None found.</p>{% endif %}
+{% endblock %}

@@ -1,0 +1,125 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ScannerReadOnly",
+      "Effect": "Allow",
+      "Action": [
+        "access-analyzer:ListAnalyzers",
+        "bedrock-agentcore:GetAgentRuntime",
+        "bedrock-agentcore:GetGateway",
+        "bedrock-agentcore:GetGatewayTarget",
+        "bedrock-agentcore:ListAgentRuntimes",
+        "bedrock-agentcore:ListApiKeyCredentialProviders",
+        "bedrock-agentcore:ListGateways",
+        "bedrock-agentcore:ListGatewayTargets",
+        "bedrock-agentcore:ListMemories",
+        "bedrock-agentcore:ListOauth2CredentialProviders",
+        "bedrock:GetAgent",
+        "bedrock:GetAgentActionGroup",
+        "bedrock:GetDataSource",
+        "bedrock:GetKnowledgeBase",
+        "bedrock:GetModelInvocationLoggingConfiguration",
+        "bedrock:ListAgentActionGroups",
+        "bedrock:ListAgentKnowledgeBases",
+        "bedrock:ListAgents",
+        "bedrock:ListDataSources",
+        "bedrock:ListKnowledgeBases",
+        "cloudtrail:DescribeTrails",
+        "cloudtrail:GetEventSelectors",
+        "cloudtrail:LookupEvents",
+        "dynamodb:DescribeTable",
+        "dynamodb:ListTables",
+        "dynamodb:ListTagsOfResource",
+        "ec2:DescribeInstances",
+        "ec2:DescribeRouteTables",
+        "ec2:DescribeSecurityGroups",
+        "ec2:DescribeSubnets",
+        "ec2:DescribeVpcEndpoints",
+        "ecs:DescribeServices",
+        "ecs:DescribeTaskDefinition",
+        "ecs:ListClusters",
+        "ecs:ListServices",
+        "eks:DescribeCluster",
+        "eks:DescribePodIdentityAssociation",
+        "eks:ListClusters",
+        "eks:ListPodIdentityAssociations",
+        "elasticloadbalancing:DescribeListeners",
+        "elasticloadbalancing:DescribeLoadBalancers",
+        "elasticloadbalancing:DescribeTargetGroups",
+        "iam:GenerateServiceLastAccessedDetails",
+        "iam:GetAccessKeyLastUsed",
+        "iam:GetAccountAuthorizationDetails",
+        "iam:GetServiceLastAccessedDetails",
+        "iam:ListAccessKeys",
+        "iam:SimulatePrincipalPolicy",
+        "inspector2:BatchGetAccountStatus",
+        "inspector2:ListFindings",
+        "lambda:GetPolicy",
+        "lambda:ListEventSourceMappings",
+        "lambda:ListFunctions",
+        "lambda:ListFunctionUrlConfigs",
+        "macie2:DescribeBuckets",
+        "macie2:GetMacieSession",
+        "rds:DescribeDBClusters",
+        "rds:DescribeDBInstances",
+        "route53resolver:ListResolverQueryLogConfigs",
+        "s3:GetBucketLocation",
+        "s3:GetBucketPolicy",
+        "s3:GetBucketPolicyStatus",
+        "s3:GetBucketTagging",
+        "s3:GetEncryptionConfiguration",
+        "s3:ListAllMyBuckets",
+        "secretsmanager:GetResourcePolicy",
+        "secretsmanager:ListSecrets",
+        "ssm:DescribeParameters",
+        "sts:GetCallerIdentity"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "ReadDnsQueryLogsOnly",
+      "Effect": "Allow",
+      "Action": [
+        "logs:FilterLogEvents"
+      ],
+      "Resource": "arn:aws:logs:*:${aws:PrincipalAccount}:log-group:/aws/route53resolver/*"
+    },
+    {
+      "Sid": "TrivyEcrSignIn",
+      "Effect": "Allow",
+      "Action": [
+        "ecr:GetAuthorizationToken"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "TrivyPullsAgentImages",
+      "Effect": "Allow",
+      "Action": [
+        "ecr:BatchCheckLayerAvailability",
+        "ecr:BatchGetImage",
+        "ecr:GetDownloadUrlForLayer"
+      ],
+      "Resource": "arn:aws:ecr:*:${aws:PrincipalAccount}:repository/*"
+    },
+    {
+      "Sid": "NeverReadSecretsOrData",
+      "Effect": "Deny",
+      "Action": [
+        "dynamodb:GetItem",
+        "dynamodb:Query",
+        "dynamodb:Scan",
+        "kms:Decrypt",
+        "lambda:GetFunction",
+        "s3:GetObject",
+        "secretsmanager:GetSecretValue",
+        "ssm:GetParameter",
+        "ssm:GetParameterHistory",
+        "ssm:GetParameters",
+        "ssm:GetParametersByPath"
+      ],
+      "Resource": "*"
+    }
+  ]
+}
