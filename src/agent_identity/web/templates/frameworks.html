@@ -1,0 +1,27 @@
+{% extends "base.html" %}{% block title %}Frameworks{% endblock %}
+{% macro fw(rows) %}<div class="table-scroll"><table class="compact"><thead><tr><th>Risk</th><th class="num">Checks</th><th class="num">Findings</th><th class="num">Agents</th><th class="num">Critical</th><th class="num">High</th></tr></thead><tbody>
+{% for r in rows %}<tr><td>{{ r.id if r.id != r.name }} {{ r.name }}</td>{% if r.rules %}<td class="num">{{ r.rules }}</td><td class="num">{{ r.findings }}</td><td class="num">{{ r.agents }}</td><td class="num">{{ r.counts.critical }}</td><td class="num">{{ r.counts.high }}</td>{% else %}<td colspan="5" class="muted">This tool has no check for this, so it's not covered</td>{% endif %}</tr>{% endfor %}
+</tbody></table></div>{% endmacro %}
+{% block main %}
+<h1>Frameworks</h1>
+<p class="lede">How findings map to published risk lists. A count of zero means the checks found nothing, and only covers what this tool checks. It doesn't show compliance.</p>
+<h2>Autonomy, by AWS scoping matrix scope</h2>
+<div class="table-scroll"><table class="compact"><thead><tr><th>Scope</th><th>Means</th><th class="num">Agents</th><th>Which</th></tr></thead><tbody>
+{% for s in scopes %}<tr><td>{{ s.scope }} {{ s.name }}</td><td>{{ s.text }}</td><td class="num">{{ s.count }}</td><td>{% for a in s.agents %}<a href="/agents/{{ a.id|q }}">{{ a.name }}</a>{{ ', ' if not loop.last }}{% endfor %}</td></tr>{% endfor %}
+</tbody></table></div>
+<p class="muted">Estimated from configuration.{% if unscoped %} {{ unscoped }} agents couldn't be estimated.{% endif %}</p>
+<h2>OWASP Non-Human Identities Top 10 (2025)</h2>{{ fw(nhi) }}
+<h2>OWASP Top 10 for Agentic Applications</h2>{{ fw(asi) }}
+<h2>AWS scoping matrix security dimensions</h2>{{ fw(aws) }}
+<h2>Model invocation logging</h2>
+<ul class="plain">{% for region, state in logging.items() %}<li>{{ region }}: {{ state|tri('On','Off') }}</li>{% else %}<li class="muted">Not assessed.</li>{% endfor %}</ul>
+<h2 id="score">How the score works</h2>
+<ul class="plain prose">
+<li>Each area starts at 100. A critical finding takes off 45, high 22, medium 8 and low 3.</li>
+<li>An agent's score is a weighted average: data 30%, identity 25%, secrets 15%, network 15%, runtime 10%, governance 5%. Areas with nothing assessed are left out.</li>
+<li>A critical finding limits the agent to 40, and a high finding limits it to 70, so good results elsewhere can't hide them.</li>
+<li>The overall score averages the mean of all agents with the mean of the worst quarter.</li>
+<li>Scores below 75% check coverage are marked provisional, because checks that couldn't run don't count against them.</li>
+<li>Use the score to decide what to look at first. It isn't a measure of how likely a breach is.</li>
+</ul>
+{% endblock %}

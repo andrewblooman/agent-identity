@@ -1,0 +1,39 @@
+{% extends "base.html" %}{% block title %}Data access{% endblock %}
+{% block main %}
+<h1>Which agents can reach which data</h1>
+<p class="lede">{{ sensitive_grants|length }} routes lead from agents to sensitive data, and {{ writers|length }} of them can change it. Permissions show what's possible, which can be much more than what an agent actually does.</p>
+<ul class="stats">
+  <li><strong>{{ use['used'] }}</strong> confirmed in use</li>
+  <li><strong>{{ use['unused'] }}</strong> not used, and could be removed</li>
+  <li><strong>{{ use['unknown'] }}</strong> unknown, as data events aren't on</li>
+  <li><strong>{{ indirect|length }}</strong> indirect, through another role or a knowledge base</li>
+</ul>
+
+<div class="matrix-head">
+  <h2>Reach matrix</h2>
+  <p class="toggle">{% if show == 'all' %}<a href="/data">Show sensitive and unclassified stores</a>{% else %}<a href="/data?show=all">Show all {{ all_store_count }} stores</a>{% endif %}</p>
+</div>
+<ul class="lvl-key" aria-label="Access levels, weakest to strongest"><li><span class="lvl lvl-read">Read</span></li><li><span class="lvl lvl-write">Write</span></li><li><span class="lvl lvl-delete">Delete</span></li><li><span class="lvl lvl-admin">Admin</span></li><li class="muted">Each cell shows the strongest level. A dotted edge means the route is indirect.</li></ul>
+<div class="table-scroll matrix-wrap"><table class="matrix">
+<thead>
+<tr><th rowspan="2" class="corner">Agent</th>{% for g in grouped %}<th colspan="{{ g.count }}" class="band band-{{ g.sensitivity }}">{{ g.sensitivity|capitalize }}</th>{% endfor %}</tr>
+<tr>{% for s in stores %}<th class="store-head"><a href="/data/store?arn={{ s.arn|q }}" title="{{ s.type }}: {{ s.name }}">{{ s.name }}</a></th>{% endfor %}</tr>
+</thead>
+<tbody>
+{% for row in rows %}<tr><th scope="row"><a href="/agents/{{ row.agent.id|q }}">{{ row.agent.name }}</a></th>
+{% for s in stores %}{% set g = cell.get((row.agent.id, s.arn)) %}<td>{% if g %}{% set top = strongest(g) %}<a class="cell lvl-{{ top.value }} {{ 'cell-indirect' if g.indirect }}" href="/data/store?arn={{ s.arn|q }}" title="{{ row.agent.name }} on {{ s.name }}: {{ g.levels|map(attribute='value')|join(', ') }}. {{ g.path|join(', then ') }}{% if g.indirect_levels %}. Only through another route: {{ g.indirect_levels|map(attribute='value')|join(', ') }}{% endif %}">{{ top.value|capitalize }}</a>{% endif %}</td>{% endfor %}
+</tr>{% else %}<tr><td colspan="{{ stores|length + 1 }}">No agent can reach these stores.</td></tr>{% endfor %}
+</tbody></table></div>
+
+<div class="split-even">
+<section>
+  <h2>Who can poison what others read</h2>
+  <p class="muted">An agent that can write to a knowledge base, its source bucket or shared memory can plant instructions that another agent later follows.</p>
+  {% if victims %}<ul class="plain">{% for f in victims %}<li><a href="/agents/{{ f.agent_id|q }}">{{ estate.agents[f.agent_id].name }}</a> reads: {{ f.evidence }}</li>{% endfor %}</ul>{% else %}<p>None found.</p>{% endif %}
+</section>
+<section>
+  <h2>Access nobody seems to need</h2>
+  {% if unused %}<ul class="plain">{% for g in unused[:10] %}<li><a href="/agents/{{ g.agent_id|q }}">{{ estate.agents[g.agent_id].name }}</a> on {{ estate.stores[g.store_arn].name }}<div class="sub">{{ g.use_detail }}</div></li>{% endfor %}</ul>{% if unused|length > 10 %}<p class="muted">and {{ unused|length - 10 }} more</p>{% endif %}{% else %}<p>None confirmed. Turn on CloudTrail data events to find out more.</p>{% endif %}
+</section>
+</div>
+{% endblock %}

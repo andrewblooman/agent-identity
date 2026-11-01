@@ -1,0 +1,12 @@
+{% extends "base.html" %}{% block title %}Findings{% endblock %}
+{% block main %}
+<h1>Findings</h1>
+<form class="filters" method="get" action="/findings" hx-get="/findings" hx-target="#findings-list" hx-trigger="change" hx-push-url="true">
+  <label>Severity <select name="severity"><option value="">All</option>{% for s in severities %}<option value="{{ s }}" {{ 'selected' if params.get('severity') == s }}>{{ s|capitalize }}</option>{% endfor %}</select></label>
+  <label>Area <select name="domain"><option value="">All</option>{% for d in domains %}<option value="{{ d }}" {{ 'selected' if params.get('domain') == d }}>{{ d|capitalize }}</option>{% endfor %}</select></label>
+  <label>Agent <select name="agent"><option value="">All</option>{% for name, id in agent_names %}<option value="{{ id }}" {{ 'selected' if params.get('agent') == id }}>{{ name }}</option>{% endfor %}</select></label>
+  {% if params.get('rule') %}<input type="hidden" name="rule" value="{{ params.get('rule') }}"><a href="/findings">Clear {{ params.get('rule') }}</a>{% endif %}
+  <noscript><button type="submit">Filter</button></noscript>
+</form>
+<div id="findings-list">{% include "_findings_list.html" %}</div>
+{% endblock %}

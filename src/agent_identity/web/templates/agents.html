@@ -1,0 +1,14 @@
+{% extends "base.html" %}{% block title %}Agents{% endblock %}
+{% block main %}
+<h1>Agents</h1>
+<p class="lede">Every workload that looks like an agent, and the evidence for it. <strong>Confirmed</strong> means a managed agent service or recorded model calls. <strong>Likely</strong> comes from config. <strong>Possible</strong> means a permission, with no workload found.</p>
+<form class="filters" method="get" action="/agents" hx-get="/agents" hx-target="#agents-table" hx-trigger="change, keyup changed delay:250ms from:input[name=q]" hx-push-url="true">
+  <label>Name <input type="search" name="q" value="{{ params.get('q','') }}"></label>
+  <label>Type <select name="kind"><option value="">All</option>{% for k in kinds %}<option value="{{ k }}" {{ 'selected' if params.get('kind') == k }}>{{ k|capitalize }}</option>{% endfor %}</select></label>
+  <label>Evidence <select name="confidence"><option value="">All</option>{% for c in confidences %}<option value="{{ c }}" {{ 'selected' if params.get('confidence') == c }}>{{ c|capitalize }}</option>{% endfor %}</select></label>
+  <label>Platform <select name="platform"><option value="">All</option>{% for p in platforms %}<option value="{{ p }}" {{ 'selected' if params.get('platform') == p }}>{{ p }}</option>{% endfor %}</select></label>
+  <label>Risk <select name="flag"><option value="">All</option>{% for key, label in flag_labels.items() %}<option value="{{ key }}" {{ 'selected' if params.get('flag') == key }}>{{ label }}</option>{% endfor %}</select></label>
+  <noscript><button type="submit">Filter</button></noscript>
+</form>
+<div id="agents-table">{% include "_agents_table.html" %}</div>
+{% endblock %}

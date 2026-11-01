@@ -1,0 +1,8 @@
+{% import "_macros.html" as m with context %}
+<p class="muted" role="status">{{ total }} findings from {{ groups|length }} checks</p>
+{% for g in groups %}<details class="finding-group" {{ 'open' if groups|length == 1 }}>
+<summary>{{ m.sev(g.worst) }} <span class="fg-title">{{ g.title }}</span> <span class="muted">{{ g['items']|length }} found, {{ g.domain }}, {{ g.id }}</span></summary>
+<p><strong>What to do:</strong> {{ g.remediation }}</p>
+<div class="table-scroll"><table class="compact"><thead><tr><th>Severity</th><th>Agent</th><th>Evidence</th></tr></thead><tbody>
+{% for f in g['items'] %}<tr><td>{{ m.sev(f.severity) }}</td><td><a href="/agents/{{ f.agent_id|q }}">{{ estate.agents[f.agent_id].name }}</a></td><td>{{ f.evidence }}</td></tr>{% endfor %}
+</tbody></table></div></details>{% else %}<p>No findings match these filters.</p>{% endfor %}

@@ -1,0 +1,16 @@
+{% extends "base.html" %}{% block title %}Runtime{% endblock %}
+{% block main %}
+<h1>Where agents run</h1>
+<p class="lede">Runtime configuration and known vulnerabilities. {{ not_assessed|length }} of {{ rows|length }} agents have no vulnerability data, which isn't the same as having none.</p>
+<h2>Vulnerabilities</h2>
+{% if vulns %}<div class="ring-row">{{ m.ring(severity_ring, "CVEs", 120) }}{{ m.ring_key(severity_ring) }}</div>
+<div class="table-scroll"><table><thead><tr><th>Severity</th><th>CVE</th><th>Package</th><th>Fixed in</th><th>Known exploit</th><th>Agent</th><th>Internet-facing</th><th>Source</th></tr></thead><tbody>
+{% for i in vulns %}{% set v = i.vuln %}<tr><td>{{ m.sev(v.severity) }}</td><td><code>{{ v.cve }}</code></td><td>{{ v.package }}</td><td>{{ v.fixed_in or 'No fix yet' }}</td><td>{{ v.exploit_available|tri('Yes','No','Unknown') }}</td><td><a href="/agents/{{ i.agent.id|q }}">{{ i.agent.name }}</a></td><td>{{ 'Yes' if i.internet else 'No' }}</td><td>{{ v.source }}</td></tr>{% endfor %}
+</tbody></table></div>{% else %}<p>No vulnerabilities in the agents that could be assessed.</p>{% endif %}
+<h2>Container and host settings</h2>
+<div class="table-scroll"><table><thead><tr><th>Agent</th><th>Runs on</th><th>Image pinned</th><th>Privileged</th><th>Root user</th><th>Read-only filesystem</th><th>Language runtime</th><th>Vulnerability data</th></tr></thead><tbody>
+{% for r in rows %}{% set x = r.agent.runtime %}<tr><td><a href="/agents/{{ r.agent.id|q }}">{{ r.agent.name }}</a></td><td>{{ x.platform_detail or r.agent.platform.value }}</td><td>{{ x.image_pinned|tri('Yes','No','–') }}</td><td>{{ x.privileged|tri('Yes','No','–') }}</td><td>{{ x.runs_as_root|tri('Yes','No','–') }}</td><td>{{ x.read_only_root|tri('Yes','No','–') }}</td><td>{{ x.language_runtime or '–' }}{% if x.runtime_deprecated %} <div class="sub">{{ m.sev('medium') }} Out of support</div>{% endif %}</td><td>{% if x.vulns_assessed %}{{ x.vulns_source }}{% else %}<span class="muted">Not assessed{% if x.vulns_source %}: {{ x.vulns_source }}{% endif %}</span>{% endif %}</td></tr>{% endfor %}
+</tbody></table></div>
+<p class="muted">A dash means the setting doesn't apply to this platform, or couldn't be read.</p>
+{% if frameworks %}<h2>Agent frameworks found</h2><ul class="plain">{% for name, count in frameworks %}<li>{{ name }} <span class="muted">in {{ count }} agent{{ 's' if count != 1 }}</span></li>{% endfor %}</ul>{% endif %}
+{% endblock %}

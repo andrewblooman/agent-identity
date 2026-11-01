@@ -1,0 +1,13 @@
+{% extends "base.html" %}{% block title %}SaaS and external{% endblock %}
+{% block main %}
+<h1>What agents connect to outside AWS</h1>
+<p class="note"><strong>This is only the AWS side.</strong> It's worked out from credential providers, gateway targets, secret names and config. It can't see OAuth grants made inside Google Workspace, Salesforce or similar products, which is how the 2026 Vercel and Context.ai breach spread. Check those in each product's admin console.</p>
+<h2>By vendor</h2>
+{% if vendors %}<div class="table-scroll"><table><thead><tr><th>Vendor</th><th>Agent</th><th>Credential</th><th>Stored as</th><th>Scopes</th><th>Can write</th><th>Found through</th></tr></thead><tbody>
+{% for v in vendors %}{% for c in v.connections %}<tr>{% if loop.first %}<th scope="rowgroup" rowspan="{{ v.connections|length }}">{{ v.vendor }}</th>{% endif %}<td><a href="/agents/{{ c.agent.id|q }}">{{ c.agent.name }}</a></td><td>{{ c.connection.credential_type }}</td><td>{{ c.connection.credential_ref or 'Unknown' }}</td><td>{% if c.connection.scopes %}<code class="wrap">{{ c.connection.scopes|join(', ') }}</code>{% else %}<span class="muted">Not visible</span>{% endif %}</td><td>{{ c.connection.can_write|tri('Yes','No','Unknown') }}</td><td>{{ c.connection.source }}</td></tr>{% endfor %}{% endfor %}
+</tbody></table></div>{% else %}<p>No external connections found in agent config.</p>{% endif %}
+<h2>External tools</h2>
+{% if tools %}<div class="table-scroll"><table><thead><tr><th>Tool</th><th>Type</th><th>Target</th><th>Agent</th><th>Can make changes</th><th>Needs approval</th></tr></thead><tbody>
+{% for t in tools %}<tr><td>{{ t.tool.name }}</td><td>{{ t.tool.type }}</td><td>{{ t.tool.target }}</td><td><a href="/agents/{{ t.agent.id|q }}">{{ t.agent.name }}</a></td><td>{{ t.tool.writes|tri('Yes','No','Unknown') }}</td><td>{{ t.tool.requires_approval|tri('Yes','No','Unknown') }}</td></tr>{% endfor %}
+</tbody></table></div>{% else %}<p>No external tools found.</p>{% endif %}
+{% endblock %}

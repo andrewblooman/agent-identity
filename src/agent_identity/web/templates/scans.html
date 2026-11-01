@@ -1,0 +1,18 @@
+{% extends "base.html" %}{% block title %}Scans{% endblock %}
+{% block main %}
+<h1>Scans</h1>
+<section class="scan-box">
+  <h2>Scan your AWS account</h2>
+  <p>Using profile <code>{{ settings.aws_profile or 'default' }}</code> in {{ settings.scan_regions|join(', ') }}.</p>
+  <p class="muted">The scan only makes calls on a read-only list, never reads secret values, and doesn't turn on any AWS service. It takes a few minutes.</p>
+  <form method="post" action="/scans/live"><button class="primary" type="submit" {{ 'disabled' if running }}>{{ 'Scan running' if running else 'Scan my account' }}</button></form>
+</section>
+{% if estate %}<h2>Sources in the latest {{ view }} scan</h2>
+<div class="table-scroll"><table class="compact"><thead><tr><th>Source</th><th>Region</th><th>Status</th><th>Details</th></tr></thead><tbody>
+{% for c in estate.snapshot.coverage %}<tr><td>{{ c.source }}</td><td>{{ c.region }}</td><td>{{ c.status.value|capitalize }}</td><td>{{ c.detail }}</td></tr>{% endfor %}
+</tbody></table></div>{% endif %}
+<h2>History</h2>
+<div class="table-scroll"><table class="compact"><thead><tr><th>Started</th><th>Data</th><th>Status</th><th class="num">Agents</th><th class="num">Findings</th><th class="num">Score</th><th class="num">Checks run</th></tr></thead><tbody>
+{% for s in history %}<tr><td>{{ s.taken_at|date_time if s.taken_at else s.started_at|date_time }}</td><td>{{ 'Demo' if s.mode == 'demo' else 'Your account' }}</td><td>{{ s.status|capitalize }}{% if s.error %}<div class="sub">{{ s.error }}</div>{% endif %}</td><td class="num">{{ s.agent_count if s.agent_count is not none else '–' }}</td><td class="num">{{ s.finding_count if s.finding_count is not none else '–' }}</td><td class="num">{{ s.score if s.score is not none else '–' }}</td><td class="num">{{ s.coverage_pct ~ '%' if s.coverage_pct is not none else '–' }}</td></tr>{% endfor %}
+</tbody></table></div>
+{% endblock %}

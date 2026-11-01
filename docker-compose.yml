@@ -1,0 +1,27 @@
+services:
+  dashboard:
+    build: .
+    # The dashboard has no login, so it's only published on this machine.
+    ports:
+      - "127.0.0.1:8080:8080"
+    environment:
+      DEFAULT_VIEW: ${DEFAULT_VIEW:-demo}
+      AWS_PROFILE: ${AWS_PROFILE:-default}
+      SCAN_REGIONS: ${SCAN_REGIONS:-eu-west-1}
+      CLOUDTRAIL_LOOKBACK_DAYS: ${CLOUDTRAIL_LOOKBACK_DAYS:-14}
+      TRIVY_ENABLED: ${TRIVY_ENABLED:-true}
+      AWS_SHARED_CREDENTIALS_FILE: /aws/credentials
+      AWS_CONFIG_FILE: /aws/config
+    volumes:
+      - ${HOME}/.aws:/aws:ro
+      - scan-data:/app/data
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  scan-data:

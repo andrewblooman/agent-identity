@@ -1,0 +1,18 @@
+{% import "_macros.html" as m with context %}
+<p class="muted" role="status">{{ rows|length }} of {{ estate.rows|length }} shown</p>
+<div class="table-scroll"><table>
+<thead><tr><th>Trifecta</th><th>Agent</th><th>Type</th><th>Evidence</th><th class="num">Scope</th><th class="num">Score</th><th class="num">Assessed</th><th class="num">Sensitive stores</th><th>Internet</th><th>Owner</th></tr></thead>
+<tbody>
+{% for row in rows %}<tr>
+<td>{{ m.glyph(row.result.trifecta, 30) }}</td>
+<td><a href="/agents/{{ row.agent.id|q }}">{{ row.agent.name }}</a><div class="sub">{{ row.agent.platform.value }}, {{ row.agent.region }}</div></td>
+<td>{{ row.agent.kind.value|capitalize }}</td>
+<td>{{ row.agent.confidence.value|capitalize }}</td>
+<td class="num">{{ row.result.autonomy_scope if row.result.autonomy_scope is not none else '?' }}</td>
+<td class="num">{{ m.score(row) }}</td>
+<td class="num">{{ row.result.coverage_pct }}%</td>
+<td class="num">{{ sensitive_counts[row.agent.id] }}</td>
+<td>{% if row.agent.network.inbound is none %}<span class="muted">Not assessed</span>{% elif row.internet %}Yes{% else %}No{% endif %}</td>
+<td>{{ row.agent.owner or 'None' }}</td>
+</tr>{% else %}<tr><td colspan="10">No agents match these filters.</td></tr>{% endfor %}
+</tbody></table></div>
